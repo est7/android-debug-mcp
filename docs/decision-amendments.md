@@ -281,3 +281,135 @@ SIGTERM adb child
 
 [`backlog.md` v2-F · Element-based interaction](./backlog.md#v2-f--element-based-interaction-mobile-mcp-评估) 启动时,**那时**再回看 `Android-MCP/src/android_mcp/tree/service.py:29-49` 的 `get_interactive_elements` 与 `tree/service.py:96+` 的 `annotated_screenshot`,看是否能在 element-based selector 设计中复用思路(注意:仍然不直接借代码,只借设计 idea)。前提是它的所有操作必须能包进我们的 commands/events 证据链。
 
+---
+
+## G · MCP best practices 对齐(Audit Round 2,2026-05-19)
+
+- **日期**:2026-05-19
+- **类型**:♻️ 翻案(tool 命名 + tool 数)+ ➕ 增量(schema 严格性、CHARACTER_LIMIT、register helper)
+- **触发**:用户 load 了 `mcp_best_practices.md` 与 `node_mcp_server.md`(skill-dev:create-mcp),codex 第二轮 audit
+- **影响范围**:design-lock § C(tool 清单、命名、数量)、amendments § D-M11(annotation matrix)、§ D-M12(cursor)、v1-implementation-plan Phase 0 / Phase 1 / 所有涉及 tool 注册的 phase
+- **共识**:6 个 major + 3 个 minor 全收
+
+### G-1 · Tool 命名:`android_debug_` 前缀(R2-M1)
+
+♻️ 翻案 § C 16 个 tool 名,加 `android_debug_` 前缀。
+
+**理由**:`android_` 太宽,通用 Android automation MCP / mobile-mcp / Android-MCP 都会先抢 `android_*`;我们 server 核心是 debug evidence,prefix 也定位到这一层。
+
+完整命名表见 [§ G-Final tool inventory](#g-final--final-tool-inventory17-个)。
+
+### G-2 · 拆 `clear-data` 出 `app_control` 成独立 tool(R2-M4)
+
+♻️ 翻案 § C 第 5 项与 § D-M11 注解。
+
+- `android_debug_app_control` 入参 `action` 枚举改为 `"launch" | "restart" | "stop"`(去掉 `"clear-data"`)→ 全部非 destructive,统一 `destructiveHint: false`
+- 新增 `android_debug_clear_app_data({ runId, confirm: true })`,单独 destructive tool;`destructiveHint: true`、`{confirm: true}` 入参缺省 reject
+- **理由**:`destructiveHint` 在 multi-action tool 上无法对所有 action 同时准确表达;拆出后语义清晰,客户端可以更精确地展示风险提示
+
+### G-3 · `list_runs` 加 cursor pagination(R2-M5)
+
+➕ 增量 § C 第 15 项与 § D-M12 一致化。
+
+- `android_debug_list_runs` 入参增加 `cursor?: string` + `limit?: number`(default 20,max 100)
+- 返回 `{ runs[], nextCursor?: string, hasMore: boolean, totalCount?: number }`
+- Cursor opaque base64,内部含 `{lastStartedAt, lastRunId}` 用于 stable sort 续读
+- **`android_debug_list_devices` 不加 cursor**:设备集合天然小(单机几台),分页是过度设计
+
+### G-4 · Zod schema 锁死 `.strict()` + bounds(R2-M6)
+
+➕ 增量,实施纪律。所有 MCP-facing input schema 必须:
+
+1. **`.strict()`**:`z.object({...}).strict()`,拒绝 unknown keys(防 agent 拼错被宽松吞)
+2. **字段 bounds**:
+   - 字符串:`min`/`max`,如 `name: z.string().min(1).max(80)`
+   - 数字:`int()` + `min`/`max`,如 `limit: z.number().int().min(1).max(500)`
+   - 数组:`min`/`max` items
+3. **可读错误信息**:每个 `.min/.max/.regex` 写第二参 message,如 `.min(1, "Name required")`
+4. **覆盖范围**:`query`/`text`/`name`/`label`/`limit`/`beforeLines`/`afterLines`/`durationMs`/`x`/`y` 等全部必有 bounds
+
+不遵守即 Phase 10 hardening 不通过。
+
+### G-5 · `RESPONSE_CHAR_LIMIT = 25000` 作为最终保险(R2-M2)
+
+➕ 增量,工程纪律。
+
+- **正常路径**:cursor + 窗口截取(crash context ±200 行、search_logs limit 100)
+- **异常路径**:tool 序列化后 character 仍 > 25000,**不静默截半数据**,而是:
+  - `structuredContent.truncated = true`
+  - `structuredContent.truncationMessage` 包含原 size + 截后 size + 减少方案(如 "提示 `cursor` 续读 / `level=E` 缩范围 / `beforeLines=50` 缩窗口")
+  - `content[0].text` 同步说明
+- **限定**:RESPONSE_CHAR_LIMIT 是 v1 全局常量,放 `server/src/mcp/constants.ts`
+- **理由**:debug 工具最容易遇到 ① 异常长 log line(stack chain 千行)② 异常多 runs;cursor 是正常路径,CHARACTER_LIMIT 是兜底
+
+### G-6 · Register helper 强制 tool 注册契约(R2-m1)
+
+➕ 增量,实施纪律。`server/src/mcp/register.ts` 提供唯一 tool 注册入口:
+
+```ts
+function registerDebugTool(server, name, config, handler):
+  - name: 必须以 `android_debug_` 前缀
+  - config 必含: title, description, inputSchema (Zod .strict()), outputSchema (Zod), annotations (4 hints all set)
+  - description 必含四段: "Use when", "Args", "Returns", "Errors"
+    - 缺一段 → throw at registration time, server boot fail
+  - handler 返回 必须经 outputSchema.parse() 才能附 structuredContent
+```
+
+Tool 文件不允许直接调用 `server.registerTool(...)`;只能走这个 helper。Phase 10 hardening 一轮 audit 所有 tool 注册路径。
+
+### G-7 · `outputSchema` 强制(R2-m3)
+
+➕ 增量 § E-m2。`structuredContent` 不再是"约定"而是"契约":每个 tool 定义 Zod `outputSchema`,handler 返回前必须 `outputSchema.parse(structuredContent)`,parse 失败 = tool 实现 bug,直接抛(不 swallow)。
+
+### G-8 · Annotation matrix 显式标 `openWorldHint`(R2-m2,更新 § D-M11)
+
+♻️ 补齐 § D-M11 annotation 表(原表只覆盖 readOnly/destructive/idempotent):
+
+| Tool | readOnly | destructive | idempotent | openWorld |
+|---|---|---|---|---|
+| `android_debug_list_devices` | ✅ | ❌ | ✅ | ✅ |
+| `android_debug_list_runs` | ✅ | ❌ | ✅ | ✅ |
+| `android_debug_get_app_state` | ✅ | ❌ | ✅ | ✅ |
+| `android_debug_get_run_summary` | ✅ | ❌ | ✅ | ✅ |
+| `android_debug_search_logs` | ✅ | ❌ | ✅ | ✅ |
+| `android_debug_extract_crash_context` | ✅ | ❌ | ✅ | ✅ |
+| `android_debug_start_session` | ❌ | ❌ | ❌ | ✅ |
+| `android_debug_stop_session` | ❌ | ❌ | ❌ | ✅ |
+| `android_debug_mark_event` | ❌ | ❌ | ❌ | ✅ |
+| `android_debug_app_control` | ❌ | ❌ | ❌ | ✅ |
+| `android_debug_clear_app_data` | ❌ | **✅** | ❌ | ✅ |
+| `android_debug_tap` | ❌ | ❌ | ❌ | ✅ |
+| `android_debug_input_text` | ❌ | ❌ | ❌ | ✅ |
+| `android_debug_send_key` | ❌ | ❌ | ❌ | ✅ |
+| `android_debug_swipe` | ❌ | ❌ | ❌ | ✅ |
+| `android_debug_capture` | ❌ | ❌ | ❌ | ✅ |
+| `android_debug_collect_bundle` | ❌ | ❌ | ❌ | ✅ |
+
+所有 tool `openWorldHint: true`(交互真实设备/文件系统)。
+
+### G-Plan note · plan Phase 0 描述与代码 drift
+
+R2-M3 提到 plan Phase 0 文字写的是 `new Server({name,version},{capabilities:{tools:{}}})`,但实际 Phase 0 代码已经是 `new McpServer({name,version})`(SDK 1.29 把 `Server` deprecated 时改的)。**Plan 文字落后,代码是 canonical**;不就地改 plan,以本 amendment 为准。
+
+### G-Final · Final tool inventory(17 个)
+
+| # | Tool | 备注 |
+|---|---|---|
+| 1 | `android_debug_list_devices` | |
+| 2 | `android_debug_start_session` | 入参含 `projectRoot?` / `userId?` / `clearLocalRunLogs?` / `clearDeviceLogcat?` / `logcatBufferSize?` / `launchOnStart?` |
+| 3 | `android_debug_stop_session` | 入参 `runId?`,active 数=1 时可省 |
+| 4 | `android_debug_mark_event` | name regex + payload size ≤ 16KB |
+| 5 | `android_debug_app_control` | action: `"launch" \| "restart" \| "stop"`(去掉 clear-data) |
+| 6 | `android_debug_clear_app_data` | **NEW**(G-2 拆出),destructive,要 `{confirm:true}` |
+| 7 | `android_debug_get_app_state` | |
+| 8 | `android_debug_tap` | |
+| 9 | `android_debug_input_text` | mode: ascii / unicode-via-clipboard(v1-spike-B) |
+| 10 | `android_debug_send_key` | key 白名单 |
+| 11 | `android_debug_swipe` | |
+| 12 | `android_debug_capture` | kinds + captureId |
+| 13 | `android_debug_search_logs` | cursor + maxLimit 500 |
+| 14 | `android_debug_extract_crash_context` | beforeLines/afterLines 默认 ±200 |
+| 15 | `android_debug_get_run_summary` | content + structuredContent |
+| 16 | `android_debug_list_runs` | **G-3 新增 cursor + limit**;返回 `{runs, nextCursor?, hasMore, totalCount?}` |
+| 17 | `android_debug_collect_bundle` | logs: `"none"\|"redacted"\|"raw"` |
+

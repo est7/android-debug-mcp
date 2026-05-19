@@ -7,7 +7,7 @@
 | 文件 | 内容 | 状态 |
 |---|---|---|
 | [`design-lock-v1.md`](./design-lock-v1.md) | v1 设计决策正本(17 项决策 + 假设 + 验收 + 显式 out-of-scope) | locked 2026-05-19 |
-| [`decision-amendments.md`](./decision-amendments.md) | lock 之外的增量与翻案(§ A Q2 logcat 防御、§ B Q1 mobile-mcp、§ C codex critical、§ D codex major、§ E codex minor) | living |
+| [`decision-amendments.md`](./decision-amendments.md) | lock 之外的增量与翻案(§ A Q2 logcat / § B Q1 mobile-mcp / § C-D-E codex audit r1 / § F 参考实现 / § G MCP best practices r2) | living |
 | [`v1-implementation-plan.md`](./v1-implementation-plan.md) | 12-phase 实施计划(含 Q2 防御点)+ 13 项 open implementation decision;实施前需对照 amendments § C-E 修订 | locked 2026-05-19 |
 | [`audit-2026-05-19-codex.md`](./audit-2026-05-19-codex.md) | codex audit 原文留档(5 critical / 13 major / 5 minor / 8 correctly-locked) | archived 2026-05-19 |
 | [`backlog.md`](./backlog.md) | v1.1 / v2 / v3 留档 + v1-spike(audit 中立未决项) | living |
