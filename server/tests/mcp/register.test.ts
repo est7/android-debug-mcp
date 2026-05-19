@@ -1,0 +1,125 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import { ANDROID_DEBUG_TOOL_NAMES } from "../../src/mcp/constants.ts";
+import {
+  type DebugToolAnnotations,
+  type DebugToolConfig,
+  ToolRegistrationError,
+  registerDebugTool,
+} from "../../src/mcp/register.ts";
+
+function freshServer(): McpServer {
+  return new McpServer({ name: "android-debug-mcp-test", version: "0.0.0-test" });
+}
+
+const validAnnotations: DebugToolAnnotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+};
+
+const validDescription = [
+  "Lists adb devices.",
+  "Use when: agent needs to pick a deviceSerial.",
+  "Args: none.",
+  "Returns: an array of devices.",
+  "Errors: adb_not_found when adb binary missing.",
+].join("\n");
+
+const validInput = z.object({}).strict();
+const validOutput = z.object({ devices: z.array(z.string()) }).strict();
+
+function baseConfig(): DebugToolConfig<typeof validInput, typeof validOutput> {
+  return {
+    title: "list adb devices",
+    description: validDescription,
+    inputSchema: validInput,
+    outputSchema: validOutput,
+    annotations: validAnnotations,
+  };
+}
+
+describe("registerDebugTool", () => {
+  it("registers a tool that satisfies all contracts", () => {
+    const server = freshServer();
+    expect(() =>
+      registerDebugTool(server, "android_debug_list_devices", baseConfig(), async () => ({
+        structuredContent: { devices: ["abc"] },
+      })),
+    ).not.toThrow();
+  });
+
+  it("rejects names without android_debug_ prefix", () => {
+    const server = freshServer();
+    expect(() =>
+      registerDebugTool(server, "list_devices", baseConfig(), async () => ({
+        structuredContent: { devices: [] },
+      })),
+    ).toThrow(ToolRegistrationError);
+  });
+
+  it("rejects names that are not in the v1 inventory", () => {
+    const server = freshServer();
+    expect(() =>
+      registerDebugTool(server, "android_debug_bogus_tool", baseConfig(), async () => ({
+        structuredContent: { devices: [] },
+      })),
+    ).toThrow(/not in the v1 inventory/);
+  });
+
+  it("rejects descriptions missing required marker sections", () => {
+    const server = freshServer();
+    const cfg = { ...baseConfig(), description: "missing markers entirely" };
+    expect(() =>
+      registerDebugTool(server, "android_debug_list_devices", cfg, async () => ({
+        structuredContent: { devices: [] },
+      })),
+    ).toThrow(/Use when:.*Args:.*Returns:.*Errors:/);
+  });
+
+  it("rejects input schemas that are not strict ZodObjects", () => {
+    const server = freshServer();
+    const loose = z.object({});
+    const cfg = { ...baseConfig(), inputSchema: loose };
+    expect(() =>
+      registerDebugTool(server, "android_debug_list_devices", cfg, async () => ({
+        structuredContent: { devices: [] },
+      })),
+    ).toThrow(/strict/);
+  });
+
+  it("rejects non-object outputSchema (MCP structuredContent contract)", () => {
+    const server = freshServer();
+    const cfg = { ...baseConfig(), outputSchema: z.array(z.string()) };
+    expect(() =>
+      registerDebugTool(server, "android_debug_list_devices", cfg, async () => ({
+        structuredContent: [] as string[],
+      })),
+    ).toThrow(/outputSchema must be a ZodObject/);
+  });
+
+  it("rejects annotations missing any of the four hints", () => {
+    const server = freshServer();
+    const partial = { readOnlyHint: true, destructiveHint: false, idempotentHint: true };
+    const cfg = {
+      ...baseConfig(),
+      annotations: partial as unknown as DebugToolAnnotations,
+    };
+    expect(() =>
+      registerDebugTool(server, "android_debug_list_devices", cfg, async () => ({
+        structuredContent: { devices: [] },
+      })),
+    ).toThrow(/openWorldHint/);
+  });
+
+  it("keeps the canonical inventory in sync with the prefix rule", () => {
+    for (const name of ANDROID_DEBUG_TOOL_NAMES) {
+      expect(name.startsWith("android_debug_")).toBe(true);
+    }
+    // 17 tools per § G-Final.
+    expect(ANDROID_DEBUG_TOOL_NAMES).toHaveLength(17);
+    expect(new Set(ANDROID_DEBUG_TOOL_NAMES).size).toBe(ANDROID_DEBUG_TOOL_NAMES.length);
+  });
+});

@@ -1,0 +1,3 @@
+List of devices attached
+951a20a2               device usb:1-1.4 product:alioth model:M2012K11AC device:alioth transport_id:1
+
