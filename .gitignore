@@ -1,0 +1,30 @@
+# Bun / Node
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+bun.lockb
+
+# Run artifacts(design-lock § B-10)
+.android-debug-runs/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Agent Message Queue
+.agent-mail/
+.amqrc
+
+# Reference repos (clone-only, not part of this project)
+android-mcp-server/
+Android-MCP/
