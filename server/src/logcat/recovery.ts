@@ -20,7 +20,13 @@ export interface ReplayInput {
   readonly rawPath: string;
   readonly logcatJsonlPath: string;
   readonly crashJsonlPath: string;
-  readonly filter: FilterContext;
+  /**
+   * The Channel-B keep rule. When omitted, every parsed entry is kept —
+   * orphan recovery (§ C-5) has no live pid tracker and `metadata.json` carries
+   * no appUid, so a reconstructed filter would risk a permanently thinner
+   * `logcat.jsonl` than the raw truth; keep-all is the conservative choice.
+   */
+  readonly filter?: FilterContext;
 }
 
 export interface ReplayResult {
@@ -55,7 +61,7 @@ export async function replayParse(input: ReplayInput): Promise<ReplayResult> {
     const entry = pending;
     pending = null;
     linesParsed += 1;
-    if (!shouldKeep(merged, input.filter)) return;
+    if (input.filter !== undefined && !shouldKeep(merged, input.filter)) return;
     await logcatStream.append({
       tsRaw: merged.tsRaw,
       rawLineNo: entry.rawLineNo,

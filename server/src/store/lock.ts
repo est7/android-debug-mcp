@@ -169,6 +169,40 @@ export async function acquireLock(
   );
 }
 
+/**
+ * Whether a lock owner's process is still alive — the § C-5 liveness check,
+ * reusing `acquireLock`'s exact semantics (pid alive, plus `processStartMs`
+ * match when both sides have start-time evidence; absence of evidence is
+ * treated as live). Orphan recovery uses this so it cannot diverge from
+ * `acquireLock`'s notion of "stale".
+ */
+export function isLockOwnerLive(owner: LockOwner, deps: LockDeps = defaultDeps): boolean {
+  return isOwnerLive(owner, deps);
+}
+
+/**
+ * Owner-guarded removal of a stale lockfile, for orphan recovery (§ C-5).
+ * Unlinks `path` ONLY when its current on-disk owner still matches `expected`
+ * — so a stale lock that another process has since evicted and reacquired is
+ * left untouched. Same TOCTOU defense as a live handle's `release()`: a blind
+ * `unlink` during recovery could otherwise delete a live successor's lock.
+ */
+export async function releaseLockIfOwner(path: string, expected: LockOwner): Promise<void> {
+  const current = await readLockOwner(path);
+  if (current === null) return; // already gone
+  if (!isSameOwner(current, expected)) return; // a different owner holds it now
+  try {
+    await unlink(path);
+  } catch (err) {
+    if ((err as { code?: unknown }).code === "ENOENT") return;
+    throw new LockError(
+      "lock_release_failed",
+      path,
+      `Failed to release stale lock: ${(err as Error).message ?? String(err)}`,
+    );
+  }
+}
+
 /** Read the owner of an existing lockfile, returning null if the file is missing. */
 export async function readLockOwner(path: string): Promise<LockOwner | null> {
   try {

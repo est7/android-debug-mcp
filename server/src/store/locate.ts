@@ -2,8 +2,13 @@ import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { ToolDomainError } from "../mcp/toolError.ts";
 import type { SessionManager } from "../session/manager.ts";
-import { METADATA_FILENAME } from "./metadata.ts";
+import { METADATA_FILENAME, type Metadata, readMetadata } from "./metadata.ts";
 import { resolveRunRoot } from "./paths.ts";
+
+export interface RunEntry {
+  readonly runDir: string;
+  readonly metadata: Metadata;
+}
 
 /**
  * Resolve a runId to its on-disk run directory.
@@ -41,6 +46,31 @@ async function scanForRun(runRoot: string, runId: string): Promise<string | null
   return null;
 }
 
+/**
+ * Enumerate every run under `runRoot` — walk `<runRoot>/<package>/u<userId>/`
+ * and read each `<runId>/metadata.json`. A path without a readable, valid
+ * metadata.json is skipped (a stray file, a half-created folder, a `bundles/`
+ * dir). Shared by orphan recovery and `list_runs`.
+ */
+export async function enumerateRuns(runRoot: string): Promise<RunEntry[]> {
+  const out: RunEntry[] = [];
+  for (const pkg of await safeReaddir(runRoot)) {
+    const pkgDir = join(runRoot, pkg);
+    for (const userDir of await safeReaddir(pkgDir)) {
+      const userPath = join(pkgDir, userDir);
+      for (const runId of await safeReaddir(userPath)) {
+        const runDir = join(userPath, runId);
+        try {
+          out.push({ runDir, metadata: await readMetadata(runDir) });
+        } catch {
+          // No / unreadable / invalid metadata.json → not a well-formed run.
+        }
+      }
+    }
+  }
+  return out;
+}
+
 async function hasMetadata(runDir: string): Promise<boolean> {
   try {
     return (await stat(join(runDir, METADATA_FILENAME))).isFile();
@@ -49,11 +79,17 @@ async function hasMetadata(runDir: string): Promise<boolean> {
   }
 }
 
+/**
+ * `readdir` that tolerates a missing dir (ENOENT) and a non-directory path
+ * (ENOTDIR) — a tree walker must not crash on a stray file (e.g. a bundle
+ * archive) sitting where it expects a directory.
+ */
 async function safeReaddir(dir: string): Promise<string[]> {
   try {
     return await readdir(dir);
   } catch (err) {
-    if ((err as { code?: unknown }).code === "ENOENT") return [];
+    const code = (err as { code?: unknown }).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return [];
     throw err;
   }
 }
