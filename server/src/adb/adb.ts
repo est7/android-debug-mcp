@@ -36,6 +36,12 @@ export interface AdbResult {
   readonly exitCode: number;
 }
 
+export interface AdbBinaryResult {
+  readonly args: readonly string[];
+  readonly stdout: Buffer;
+  readonly exitCode: number;
+}
+
 let cachedAdbPath: string | null = null;
 
 /**
@@ -128,6 +134,57 @@ function handleRunAdbError(
     return { args, stdout, stderr, exitCode };
   }
   throw new AdbExecError(args, exitCode, stdout, stderr);
+}
+
+/**
+ * Run `adb <args>` and capture stdout as raw bytes. Used for binary payloads —
+ * `exec-out screencap -p` returns a PNG — where {@link runAdb}'s utf-8 decoding
+ * would corrupt the data. Callers must use `exec-out` (not `shell`) upstream so
+ * no pty LF→CRLF translation mangles the byte stream.
+ *
+ * Throws {@link AdbExecError} on non-zero exit unless `allowNonZero` is set,
+ * and {@link AdbNotFoundError} when the binary cannot be executed.
+ */
+export async function runAdbBinary(
+  args: readonly string[],
+  opts: RunAdbOptions = {},
+): Promise<AdbBinaryResult> {
+  const adbPath = await getAdbPath();
+  try {
+    const { stdout } = await execFileAsync(adbPath, [...args], {
+      encoding: "buffer",
+      maxBuffer: RUN_ADB_MAX_BUFFER,
+      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      ...(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
+    });
+    return { args, stdout, exitCode: 0 };
+  } catch (err) {
+    return handleRunAdbBinaryError(args, adbPath, err, opts);
+  }
+}
+
+function handleRunAdbBinaryError(
+  args: readonly string[],
+  adbPath: string,
+  err: unknown,
+  opts: RunAdbOptions,
+): AdbBinaryResult {
+  if (isENOENT(err)) {
+    throw new AdbNotFoundError([adbPath]);
+  }
+  const e = err as { code?: unknown; killed?: boolean; stdout?: unknown; stderr?: unknown };
+  const stdout = Buffer.isBuffer(e.stdout) ? e.stdout : Buffer.alloc(0);
+  const exitCode =
+    typeof e.code === "number"
+      ? e.code
+      : e.killed === true
+        ? ADB_TIMEOUT_EXIT_CODE // killed by `timeout` option
+        : -1; // maxBuffer overflow / other failure
+  if (opts.allowNonZero) {
+    return { args, stdout, exitCode };
+  }
+  const stderr = Buffer.isBuffer(e.stderr) ? e.stderr.toString("utf8") : "";
+  throw new AdbExecError(args, exitCode, "", stderr);
 }
 
 /**

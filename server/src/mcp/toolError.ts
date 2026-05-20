@@ -23,6 +23,7 @@ export const TOOL_ERROR_CODES = {
   singleton_violation: "singleton_violation",
   run_missing: "run_missing",
   device_disconnected: "device_disconnected",
+  input_method_unavailable: "input_method_unavailable",
   no_device: "no_device",
   ambiguous_device: "ambiguous_device",
   adb_not_found: "adb_not_found",
