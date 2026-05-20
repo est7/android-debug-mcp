@@ -7,7 +7,9 @@ import {
   type DebugToolConfig,
   ToolRegistrationError,
   registerDebugTool,
+  wrapToolHandler,
 } from "../../src/mcp/register.ts";
+import { ToolDomainError } from "../../src/mcp/toolError.ts";
 
 function freshServer(): McpServer {
   return new McpServer({ name: "android-debug-mcp-test", version: "0.0.0-test" });
@@ -121,5 +123,45 @@ describe("registerDebugTool", () => {
     // 17 tools per § G-Final.
     expect(ANDROID_DEBUG_TOOL_NAMES).toHaveLength(17);
     expect(new Set(ANDROID_DEBUG_TOOL_NAMES).size).toBe(ANDROID_DEBUG_TOOL_NAMES.length);
+  });
+});
+
+describe("wrapToolHandler — result/error transport (open decision #13)", () => {
+  it("success → content + structuredContent, no isError", async () => {
+    const wrapped = wrapToolHandler(baseConfig(), async () => ({
+      structuredContent: { devices: ["abc"] },
+    }));
+    const result = await wrapped({});
+    expect(result.structuredContent).toEqual({ devices: ["abc"] });
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0]?.text ?? "")).toEqual({ devices: ["abc"] });
+  });
+
+  it("ToolDomainError → isError:true, structured payload in content, no structuredContent", async () => {
+    const wrapped = wrapToolHandler(baseConfig(), async () => {
+      throw new ToolDomainError("no_active_session", "nothing running", { runId: "r1" });
+    });
+    const result = await wrapped({});
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    expect(JSON.parse(result.content[0]?.text ?? "")).toEqual({
+      error: "no_active_session",
+      message: "nothing running",
+      runId: "r1",
+    });
+  });
+
+  it("non-domain throw propagates as a genuine error", async () => {
+    const wrapped = wrapToolHandler(baseConfig(), async () => {
+      throw new Error("unexpected bug");
+    });
+    await expect(wrapped({})).rejects.toThrow("unexpected bug");
+  });
+
+  it("rejects when handler output violates the declared outputSchema", async () => {
+    const wrapped = wrapToolHandler(baseConfig(), async () => ({
+      structuredContent: { devices: "not-an-array" } as unknown as { devices: string[] },
+    }));
+    await expect(wrapped({})).rejects.toThrow();
   });
 });

@@ -6,6 +6,7 @@ import {
   DESCRIPTION_REQUIRED_MARKERS,
   TOOL_NAME_PREFIX,
 } from "./constants.ts";
+import { ToolDomainError } from "./toolError.ts";
 
 /**
  * All four annotation hints are mandatory (§ G-6 + § G-8). `openWorldHint` is
@@ -66,6 +67,53 @@ export class ToolRegistrationError extends Error {
  * so the cost of getting it wrong is "server doesn't start" rather than "agent
  * sees a tool with subtly broken contract at runtime".
  */
+/** Shape returned to the SDK by {@link wrapToolHandler}. */
+export interface WrappedToolResult {
+  readonly content: ReadonlyArray<{ type: "text"; text: string }>;
+  readonly structuredContent?: Record<string, unknown>;
+  readonly isError?: boolean;
+}
+
+/**
+ * Wrap a {@link DebugToolHandler} with the v1 result/error transport. Extracted
+ * from {@link registerDebugTool} so the transport (which is not just
+ * registration glue) is independently unit-testable.
+ *
+ *   - success → `outputSchema.parse(structuredContent)` then `{content,
+ *     structuredContent}`.
+ *   - `ToolDomainError` → `{content:[text], isError:true}` with NO
+ *     `structuredContent` (open decision #13: a domain failure is a normal
+ *     tool result the agent branches on; the error payload would not satisfy
+ *     the declared success outputSchema).
+ *   - any other throw → re-thrown as a genuine bug → JSON-RPC protocol error.
+ */
+export function wrapToolHandler<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+  config: DebugToolConfig<I, O>,
+  handler: DebugToolHandler<I, O>,
+): (input: z.output<I>) => Promise<WrappedToolResult> {
+  return async (input: z.output<I>): Promise<WrappedToolResult> => {
+    try {
+      const result = await handler(input);
+      const parsedStructured = config.outputSchema.parse(result.structuredContent) as Record<
+        string,
+        unknown
+      >;
+      const content = result.content
+        ? [...result.content]
+        : [{ type: "text" as const, text: JSON.stringify(parsedStructured) }];
+      return { content, structuredContent: parsedStructured };
+    } catch (err) {
+      if (err instanceof ToolDomainError) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(err.toPayload()) }],
+          isError: true,
+        };
+      }
+      throw err;
+    }
+  };
+}
+
 export function registerDebugTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   server: McpServer,
   name: string,
@@ -78,17 +126,7 @@ export function registerDebugTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny
   assertObjectOutputSchema(name, config.outputSchema);
   assertAnnotationsComplete(name, config.annotations);
 
-  const wrappedHandler = async (input: z.output<I>) => {
-    const result = await handler(input);
-    const parsedStructured = config.outputSchema.parse(result.structuredContent) as Record<
-      string,
-      unknown
-    >;
-    const content = result.content
-      ? [...result.content]
-      : [{ type: "text" as const, text: JSON.stringify(parsedStructured) }];
-    return { content, structuredContent: parsedStructured };
-  };
+  const wrappedHandler = wrapToolHandler(config, handler);
 
   server.registerTool(
     name,

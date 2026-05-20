@@ -1,4 +1,4 @@
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   assertSafeDeviceSerial,
@@ -7,7 +7,13 @@ import {
   assertSafeUserId,
 } from "./identity.ts";
 import { AppendStream } from "./jsonl.ts";
-import { type Metadata, type MetadataInput, type RunStatus, writeMetadata } from "./metadata.ts";
+import {
+  type Metadata,
+  type MetadataInput,
+  type RunStatus,
+  readMetadata,
+  writeMetadata,
+} from "./metadata.ts";
 import type { RunRootSource } from "./paths.ts";
 
 export interface RunFolderInput {
@@ -93,6 +99,47 @@ function assertSafeRunPathParts(
   assertSafePackageName(input.packageName);
   assertSafeUserId(input.userId);
   assertSafeRunId(input.runId);
+}
+
+/**
+ * Delete every *closed* run directory for `packageName` under `runRoot`
+ * (§ D-M9 `clearLocalRunLogs`). "Closed" = `metadata.closedAt != null`; this
+ * filter inherently skips active runs (closedAt null) and orphans (closedAt
+ * null but process dead — left for Phase 8 recovery). Run dirs without a
+ * readable `metadata.json` are skipped. Returns the deleted run-dir paths.
+ */
+export async function clearClosedRuns(runRoot: string, packageName: string): Promise<string[]> {
+  assertSafePackageName(packageName);
+  const pkgDir = join(runRoot, packageName);
+  const deleted: string[] = [];
+  for (const userDir of await safeReaddir(pkgDir)) {
+    const uPath = join(pkgDir, userDir);
+    for (const runDir of await safeReaddir(uPath)) {
+      const runPathAbs = join(uPath, runDir);
+      let closed = false;
+      try {
+        const meta = await readMetadata(runPathAbs);
+        closed = meta.closedAt !== null;
+      } catch {
+        // No / unreadable metadata.json → not a well-formed closed run; skip.
+        continue;
+      }
+      if (closed) {
+        await rm(runPathAbs, { recursive: true, force: true });
+        deleted.push(runPathAbs);
+      }
+    }
+  }
+  return deleted;
+}
+
+async function safeReaddir(dir: string): Promise<string[]> {
+  try {
+    return await readdir(dir);
+  } catch (err) {
+    if ((err as { code?: unknown }).code === "ENOENT") return [];
+    throw err;
+  }
 }
 
 function assertSafeRunFolderInput(input: RunFolderInput): void {
