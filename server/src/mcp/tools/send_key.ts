@@ -50,7 +50,7 @@ const description = [
   "Use when: the agent needs to press a key the touch surface cannot — go back, go home, confirm, delete.",
   `Args: \`runId\`; \`key\` — one of the whitelist: ${KEY_NAMES.join(", ")}.`,
   "Returns: `{ts}` — the ISO timestamp the key press was recorded at.",
-  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped.",
+  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `adb_command_failed` when the adb command fails.",
 ].join("\n");
 
 export function registerSendKey(server: McpServer, manager: SessionManager): void {

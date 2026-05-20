@@ -45,7 +45,7 @@ const description = [
   "Use when: the agent needs to know whether the app is running / foregrounded, or wants the post-mortem `exit-info` after a suspected crash.",
   "Args: `runId`.",
   "Returns: `{activity, foreground, pids, versionName, versionCode, abi, exitInfo[], sessionStatus}`. This tool is read-only and does not reset the session's idle timer.",
-  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session's device has dropped.",
+  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session's device has dropped; `adb_command_failed` when an adb command fails.",
 ].join("\n");
 
 export function registerGetAppState(server: McpServer, manager: SessionManager): void {

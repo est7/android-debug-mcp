@@ -39,7 +39,7 @@ const description = [
   "Use when: the agent needs to pick a `deviceSerial` before calling `android_debug_start_session`, or wants to verify a device just connected/disconnected.",
   "Args: none.",
   "Returns: `{devices: [{deviceSerial, state, model, apiLevel, abi}]}`. `model`/`apiLevel`/`abi` are populated via `getprop` only for entries in state `device`; otherwise they are `null`.",
-  "Errors: throws `adb_not_found` when the adb binary cannot be located via `ADB_PATH` env or PATH lookup. Underlying `adb devices -l` failures surface as `adb_command_failed`.",
+  "Errors: `adb_not_found` when the adb binary cannot be located via `ADB_PATH` env or PATH lookup; `adb_command_failed` when `adb devices -l` itself fails. Both are returned as a domain error (`isError:true`), not raised as a protocol error.",
 ].join("\n");
 
 export function registerListDevices(server: McpServer): void {

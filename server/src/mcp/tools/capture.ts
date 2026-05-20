@@ -49,7 +49,7 @@ const description = [
   "Use when: the agent wants visual or structural evidence of the current screen — confirm a repro state, or inspect the view tree.",
   "Args: `runId`; `kinds` — a non-empty list of `screenshot` and/or `ui_dump`; optional `label`.",
   "Returns: `{captureId, capturedAt, screenshotPath?, uiDumpPath?, uiSummary?}`; artifacts land under the run's `artifacts/`.",
-  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped. A failed ui_dump yields `uiDumpPath:null` (not an error); a screenshot that returns no PNG throws.",
+  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `adb_command_failed` when a `screencap` / `uiautomator` adb command fails. A failed ui_dump yields `uiDumpPath:null` (not an error); a screenshot that returns no PNG throws.",
 ].join("\n");
 
 /** Capture id: 12 hex chars — filename-safe and carries no caller-supplied data. */

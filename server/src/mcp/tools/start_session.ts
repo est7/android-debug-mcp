@@ -55,7 +55,7 @@ const description = [
   "Use when: the agent is about to debug an app and needs a `runId` to anchor every subsequent tool call.",
   'Args: `packageName` (required); optional `deviceSerial` (auto-picks the sole connected device when omitted), `userId` (number or "current", default "current"), `projectRoot` (for run-root resolution + git provenance), `clearLocalRunLogs`, `clearDeviceLogcat`, `launchOnStart`, `logcatBufferSize`.',
   "Returns: `{runId, runDir, runRoot, runRootSource, deviceSerial, userId, packageName, pid, launchDetail, versionName, versionCode, clearedRunCount}`. `pid` is null when the app was not launched or the launch failed (the run still starts).",
-  "Errors: `no_device` / `ambiguous_device` / `device_disconnected` for device resolution; `singleton_violation` when this (device,user,package) tuple already has an active session; `invalid_identity` for a malformed packageName.",
+  "Errors: `no_device` / `ambiguous_device` / `device_disconnected` for device resolution; `singleton_violation` when this (device,user,package) tuple already has an active session; `invalid_identity` for a malformed packageName; `adb_not_found` / `adb_command_failed` when the adb binary is missing or an adb command fails.",
 ].join("\n");
 
 export function registerStartSession(server: McpServer, manager: SessionManager): void {

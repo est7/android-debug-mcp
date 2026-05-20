@@ -22,7 +22,7 @@ const description = [
   "Use when: driving a debug repro and a point on screen must be pressed — a button, a list row, a field.",
   "Args: `runId`; `x` / `y` pixel coordinates (0-20000); optional `label` describing the target (recorded in events.jsonl).",
   "Returns: `{ts}` — the ISO timestamp the tap was recorded at.",
-  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped.",
+  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `adb_command_failed` when the adb command fails.",
 ].join("\n");
 
 export function registerTap(server: McpServer, manager: SessionManager): void {

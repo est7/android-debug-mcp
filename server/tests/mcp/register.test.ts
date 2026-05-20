@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { AdbExecError, AdbNotFoundError } from "../../src/adb/errors.ts";
 import { ANDROID_DEBUG_TOOL_NAMES } from "../../src/mcp/constants.ts";
 import {
   type DebugToolAnnotations,
@@ -149,6 +150,27 @@ describe("wrapToolHandler — result/error transport (open decision #13)", () =>
       message: "nothing running",
       runId: "r1",
     });
+  });
+
+  it("AdbError → isError:true, {error:code,message} envelope (adb failure is a domain failure)", async () => {
+    const wrapped = wrapToolHandler(baseConfig(), async () => {
+      throw new AdbExecError(["devices", "-l"], 1, "", "adb: device offline");
+    });
+    const result = await wrapped({});
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    const payload = JSON.parse(result.content[0]?.text ?? "");
+    expect(payload.error).toBe("adb_command_failed");
+    expect(typeof payload.message).toBe("string");
+  });
+
+  it("AdbNotFoundError → isError:true with error:adb_not_found", async () => {
+    const wrapped = wrapToolHandler(baseConfig(), async () => {
+      throw new AdbNotFoundError(["$(which adb)"]);
+    });
+    const result = await wrapped({});
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0]?.text ?? "").error).toBe("adb_not_found");
   });
 
   it("non-domain throw propagates as a genuine error", async () => {

@@ -34,7 +34,7 @@ const description = [
   "Use when: the agent needs to enter text during a debug run — a search query, a form field, credentials. One path handles every input: ASCII, CJK, emoji, punctuation.",
   "Args: `runId`; `text` (1-4096 chars); optional `sensitive` — set true for a secret so the run record stores a length placeholder, never the text.",
   "Returns: `{ts, redacted}` — `redacted` is true when the recorded evidence was placeheld (because `sensitive` was set, or a sensitive word was detected).",
-  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `input_method_unavailable` when ADBKeyBoard is not installed or cannot be made the device IME.",
+  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `input_method_unavailable` when ADBKeyBoard is not installed or cannot be made the device IME; `adb_command_failed` when an adb command fails.",
 ].join("\n");
 
 /**

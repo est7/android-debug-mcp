@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { AdbError } from "../adb/errors.ts";
 import {
   ANDROID_DEBUG_TOOL_NAMES,
   type AndroidDebugToolName,
@@ -85,6 +86,10 @@ export interface WrappedToolResult {
  *     `structuredContent` (open decision #13: a domain failure is a normal
  *     tool result the agent branches on; the error payload would not satisfy
  *     the declared success outputSchema).
+ *   - `AdbError` → the same `{content:[text], isError:true}` envelope, keyed by
+ *     its `code` — so an adb-layer failure (binary missing, failed command,
+ *     dropped device) reaches the agent as a branchable error, not a raw
+ *     protocol error, from every adb-touching tool.
  *   - any other throw → re-thrown as a genuine bug → JSON-RPC protocol error.
  */
 export function wrapToolHandler<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
@@ -106,6 +111,20 @@ export function wrapToolHandler<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
       if (err instanceof ToolDomainError) {
         return {
           content: [{ type: "text" as const, text: JSON.stringify(err.toPayload()) }],
+          isError: true,
+        };
+      }
+      // An adb-layer failure is a domain failure too: its `code` is in
+      // TOOL_ERROR_CODES, so render it into the same envelope rather than
+      // letting it surface as a raw JSON-RPC protocol error.
+      if (err instanceof AdbError) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ error: err.code, message: err.message }),
+            },
+          ],
           isError: true,
         };
       }

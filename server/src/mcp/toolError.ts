@@ -2,19 +2,23 @@
  * Domain-error transport for MCP tools (open-decision #13).
  *
  * v1 treats a *domain* failure (no active session, ambiguous session, payload
- * too large, …) as a normal tool result the agent branches on — NOT a
- * JSON-RPC protocol error. A tool handler signals one by throwing
- * {@link ToolDomainError}; the register helper catches it and renders:
+ * too large, a failed adb command, …) as a normal tool result the agent
+ * branches on — NOT a JSON-RPC protocol error. The register helper renders two
+ * throw kinds into the same `{isError:true}` envelope:
  *
+ *   - {@link ToolDomainError} — a session / argument / policy failure a tool
+ *     raises directly.
+ *   - an `AdbError` (`adb/errors.ts`) — an adb-layer failure (`adb_not_found`,
+ *     `adb_command_failed`, `device_disconnected`). Its `code` is part of this
+ *     catalog, so every adb-touching tool surfaces the same error shape
+ *     instead of leaking a raw protocol error.
+ *
+ * Rendered as:
  *   { content: [{ type: "text", text: JSON.stringify({error, message, ...}) }],
  *     isError: true }
  *
- * `isError: true` is MCP-correct for a tool *execution* failure and still lets
- * the agent read the structured `{error, message}` payload out of `content`.
- * A non-`ToolDomainError` throw is treated as a genuine bug and propagates as
- * a protocol-level error.
- *
- * The code catalog here is the Phase 3 subset; Phase 10 hardening completes it.
+ * Any other throw is treated as a genuine bug and propagates as a protocol
+ * error. The catalog below is the v1-final set (completed in Phase 10).
  */
 
 export const TOOL_ERROR_CODES = {
@@ -27,11 +31,10 @@ export const TOOL_ERROR_CODES = {
   no_device: "no_device",
   ambiguous_device: "ambiguous_device",
   adb_not_found: "adb_not_found",
+  adb_command_failed: "adb_command_failed",
   event_payload_too_large: "event_payload_too_large",
-  clear_blocked_by_active_session: "clear_blocked_by_active_session",
   confirmation_required: "confirmation_required",
   invalid_identity: "invalid_identity",
-  app_control_failed: "app_control_failed",
   invalid_cursor: "invalid_cursor",
   mark_not_found: "mark_not_found",
   invalid_argument: "invalid_argument",

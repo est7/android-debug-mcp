@@ -28,7 +28,7 @@ const description = [
   "Use when: the agent needs to bring the app to a known state during a debug run. Data-clearing is intentionally NOT here — use `android_debug_clear_app_data`.",
   "Args: `runId`; `action` one of `launch` | `restart` | `stop`.",
   "Returns: `{action, launched, pids, detail}` — `launched` is true when the app was (re)started, `pids` is the app's process ids observed afterwards.",
-  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session's device has dropped. Launch failures are reported in `detail` with `launched:false` rather than thrown.",
+  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session's device has dropped; `adb_command_failed` when an adb command fails. Launch failures are reported in `detail` with `launched:false` rather than thrown.",
 ].join("\n");
 
 export function registerAppControl(server: McpServer, manager: SessionManager): void {

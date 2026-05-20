@@ -29,7 +29,7 @@ const description = [
   "Use when: the agent needs to scroll a list, dismiss a sheet, or drag — any gesture between two points.",
   "Args: `runId`; start `x1`/`y1` and end `x2`/`y2` pixel coordinates (0-20000); optional `durationMs` (1-10000) for the gesture length.",
   "Returns: `{ts}` — the ISO timestamp the swipe was recorded at.",
-  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped.",
+  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `adb_command_failed` when the adb command fails.",
 ].join("\n");
 
 export function registerSwipe(server: McpServer, manager: SessionManager): void {

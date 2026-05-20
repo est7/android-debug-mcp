@@ -66,7 +66,7 @@ export async function bootstrap(): Promise<void> {
 }
 
 /** Register the full v1 tool inventory through the contract-enforcing helper. */
-function registerAllTools(server: McpServer, manager: SessionManager): void {
+export function registerAllTools(server: McpServer, manager: SessionManager): void {
   registerListDevices(server);
   registerStartSession(server, manager);
   registerStopSession(server, manager);
