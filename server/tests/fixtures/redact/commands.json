@@ -1,0 +1,33 @@
+[
+  {
+    "name": "clean tap command passes through unchanged",
+    "input": { "tool": "tap", "ts": "2026-05-20T10:00:00.000Z", "adb": "input tap 540 1200" },
+    "expected": { "tool": "tap", "ts": "2026-05-20T10:00:00.000Z", "adb": "input tap 540 1200" }
+  },
+  {
+    "name": "a password= pair inside the adb string is blanked",
+    "input": {
+      "tool": "app_control",
+      "ts": "2026-05-20T10:00:01.000Z",
+      "adb": "am start -e password=hunter2 -n com.x/.Main"
+    },
+    "expected": {
+      "tool": "app_control",
+      "ts": "2026-05-20T10:00:01.000Z",
+      "adb": "am start -e password=*** -n com.x/.Main"
+    }
+  },
+  {
+    "name": "a Cookie header inside the adb string is blanked to the line end",
+    "input": {
+      "tool": "app_control",
+      "ts": "2026-05-20T10:00:02.000Z",
+      "adb": "echo Cookie: sid=abc; theme=dark"
+    },
+    "expected": {
+      "tool": "app_control",
+      "ts": "2026-05-20T10:00:02.000Z",
+      "adb": "echo Cookie: ***"
+    }
+  }
+]

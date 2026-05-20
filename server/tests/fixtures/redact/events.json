@@ -1,0 +1,49 @@
+[
+  {
+    "name": "clean tap event passes through unchanged",
+    "input": {
+      "type": "tap",
+      "ts": "2026-05-20T10:00:00.000Z",
+      "x": 100,
+      "y": 200,
+      "label": "Login button"
+    },
+    "expected": {
+      "type": "tap",
+      "ts": "2026-05-20T10:00:00.000Z",
+      "x": 100,
+      "y": 200,
+      "label": "Login button"
+    }
+  },
+  {
+    "name": "a `token` key in a nested payload is blanked by the key matcher",
+    "input": {
+      "type": "mark",
+      "ts": "2026-05-20T10:00:01.000Z",
+      "name": "after_auth",
+      "payload": { "token": "abc123xyz", "userId": 10 }
+    },
+    "expected": {
+      "type": "mark",
+      "ts": "2026-05-20T10:00:01.000Z",
+      "name": "after_auth",
+      "payload": { "token": "***", "userId": 10 }
+    }
+  },
+  {
+    "name": "an Authorization header embedded in a string field is blanked to the line end",
+    "input": {
+      "type": "mark",
+      "ts": "2026-05-20T10:00:02.000Z",
+      "name": "request",
+      "payload": { "detail": "GET /v1/me Authorization: Bearer s3cr3ttoken" }
+    },
+    "expected": {
+      "type": "mark",
+      "ts": "2026-05-20T10:00:02.000Z",
+      "name": "request",
+      "payload": { "detail": "GET /v1/me Authorization: ***" }
+    }
+  }
+]

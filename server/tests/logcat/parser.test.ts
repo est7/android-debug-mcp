@@ -89,6 +89,23 @@ describe("parseThreadtimeLine — fixture coverage", () => {
     expect(counts.entry).toBe(8);
     expect(counts.unparsed ?? 0).toBe(0);
   });
+
+  it("unicode.txt — CJK / emoji / multi-script messages parse with content preserved", () => {
+    const messages = parseFixture("unicode.txt")
+      .map((r) => (r.kind === "entry" ? r.entry.message : ""))
+      .filter((m) => m !== "");
+    expect(messages.some((m) => m.includes("中文日志:用户点击了登录按钮"))).toBe(true);
+    expect(messages.some((m) => m.includes("✅ 🚀"))).toBe(true);
+    expect(messages.some((m) => m.includes("日本語テスト") && m.includes("한국어"))).toBe(true);
+  });
+
+  it("unicode.txt — a non-threadtime drift line is `unparsed`, never a crash", () => {
+    const counts = countKinds(parseFixture("unicode.txt"));
+    // 1 buffer switch, 5 well-formed entries, 1 garbage line.
+    expect(counts.buffer_switch).toBe(1);
+    expect(counts.entry).toBe(5);
+    expect(counts.unparsed).toBe(1);
+  });
 });
 
 describe("looksTruncated", () => {

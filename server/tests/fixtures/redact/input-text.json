@@ -1,0 +1,22 @@
+[
+  {
+    "name": "plain text — no trigger word",
+    "input": "search query results",
+    "expected": { "redacted": false, "value": "search query results" }
+  },
+  {
+    "name": "mentions 'password' — heuristic fires, length-preserving placeholder",
+    "input": "reset my password now",
+    "expected": { "redacted": true, "value": "***21" }
+  },
+  {
+    "name": "mentions 'otp' — heuristic fires",
+    "input": "the otp is 123456",
+    "expected": { "redacted": true, "value": "***17" }
+  },
+  {
+    "name": "mentions 'verification' — heuristic fires",
+    "input": "enter verification code",
+    "expected": { "redacted": true, "value": "***23" }
+  }
+]

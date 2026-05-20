@@ -1,0 +1,7 @@
+--------- beginning of main
+05-20 10:25:00.100 10100  4567  4567 I MyApp   : 中文日志:用户点击了登录按钮
+05-20 10:25:00.200 10100  4567  4567 D MyApp   : emoji 状态 ✅ 🚀 — 任务完成
+05-20 10:25:00.300 10100  4567  4567 W MyApp   : mixed 日本語テスト 한국어 + ASCII tail
+05-20 10:25:00.400 10100  4567  4567 I MyApp   : binary drift decoded to replacement chars: ��� raw bytes
+?? not-a-threadtime-line — a binary blob drifted into the main buffer ?? ���
+05-20 10:25:00.500 10100  4567  4567 I MyApp   : recovered after the noise line
