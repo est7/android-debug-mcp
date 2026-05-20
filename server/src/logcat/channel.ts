@@ -34,6 +34,8 @@ export interface LogcatShutdownInfo {
   readonly killed: boolean;
   readonly bytesRead: number;
   readonly linesParsed: number;
+  /** Crash markers the worker wrote to `crash.jsonl` over the session's life. */
+  readonly crashMarkers: number;
   /** Swallowed derived-channel (jsonl/event) write failures — raw was unaffected. */
   readonly derivedErrors: number;
   readonly bufferInfo: LogcatBufferInfo;
@@ -189,6 +191,7 @@ export class LogcatChannel {
       killed,
       bytesRead: stats.bytesRead,
       linesParsed: stats.linesParsed,
+      crashMarkers: stats.crashMarkers,
       derivedErrors: stats.derivedErrors,
       bufferInfo: this.bufferInfo,
     };

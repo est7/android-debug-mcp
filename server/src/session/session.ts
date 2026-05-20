@@ -190,6 +190,11 @@ export class Session {
           killed: info.killed,
           bytesRead: info.bytesRead,
           linesParsed: info.linesParsed,
+          // Fold the live crash count into metadata — symmetric with the
+          // Phase 8 recovery path. Without this, a run that crashed but
+          // stopped cleanly would keep `crashFound: false` despite a
+          // populated crash.jsonl.
+          crashFound: info.crashMarkers > 0,
           logcatBuffer: {
             ...current.logcatBuffer,
             effective: info.bufferInfo.effective,

@@ -135,6 +135,31 @@ describe("LogcatChannel — clean shutdown", () => {
     const info = await shutdownPromise;
     expect(info.killed).toBe(false); // SIGKILL fallback not needed
     expect(info.bufferInfo.requested).toBe("16M");
+    expect(info.crashMarkers).toBe(0); // a clean run saw no crash
     expect(channel.currentState).toBe("stopped");
+  });
+
+  it("counts crash markers and reports them in the shutdown stats", async () => {
+    const child = new FakeChild();
+    mockStartLogcat.mockResolvedValue({ child, bufferInfo: BUFFER_INFO });
+    const channel = await LogcatChannel.start(await channelInput());
+
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        "05-20 10:00:01.000 10100  4567  4567 I MyApp   : ordinary line\n" +
+          "05-20 10:00:02.000 10100  4567  4567 E AndroidRuntime: FATAL EXCEPTION: main\n",
+      ),
+    );
+    await tick();
+
+    const shutdownPromise = channel.shutdown();
+    await tick();
+    child.emit("close", 0, null);
+    const info = await shutdownPromise;
+    // The crash count must reach metadata via shutdown — Session.finalize folds
+    // `crashMarkers > 0` into `crashFound` (regression: a live crash run once
+    // kept crashFound:false because this field was not threaded through).
+    expect(info.crashMarkers).toBe(1);
   });
 });
