@@ -1,10 +1,10 @@
+import { LogcatChannel } from "../logcat/channel.ts";
 import { redactValue } from "../redact/redact.ts";
 import type { LockHandle } from "../store/lock.ts";
 import { type Metadata, type RunStatus, patchMetadata } from "../store/metadata.ts";
 import type { RunFolder } from "../store/run.ts";
 import {
   type DeviceConnectivity,
-  type LogcatState,
   type SessionHealthSnapshot,
   buildHealthSnapshot,
 } from "./health.ts";
@@ -56,7 +56,7 @@ export class Session {
 
   private status: SessionLiveStatus | SessionEndStatus = "active";
   private deviceConnectivity: DeviceConnectivity = "connected";
-  private logcatState: LogcatState = "stopped";
+  private logcat: LogcatChannel | null = null;
   private lastCommandAt: Date | null = null;
   private lastLogAt: Date | null = null;
   private cachedPids: number[] = [];
@@ -117,10 +117,34 @@ export class Session {
     this.deviceConnectivity = "degraded";
   }
 
+  /**
+   * Spawn the logcat dual channel for this run. The {@link LogcatChannel}
+   * writes directly into the run folder's `logcat.jsonl` / `crash.jsonl`
+   * streams (NOT via `appendEvent` — logcat lines carry their own device-clock
+   * timestamp and are deliberately not redacted in v1, decision #6).
+   */
+  async startLogcat(input: {
+    requestedBufferSize: string;
+    seedPids: readonly number[];
+  }): Promise<void> {
+    this.logcat = await LogcatChannel.start({
+      deviceSerial: this.deviceSerial,
+      packageName: this.packageName,
+      userId: this.userId,
+      runDir: this.runDir,
+      startedAt: this.startedAt,
+      requestedBufferSize: input.requestedBufferSize,
+      logcatStream: this.runFolder.streams.logcat,
+      crashStream: this.runFolder.streams.crash,
+      emitEvent: (event) => this.appendEvent(event),
+      seedPids: input.seedPids,
+    });
+  }
+
   healthSnapshot(): SessionHealthSnapshot {
     return buildHealthSnapshot({
       device: this.deviceConnectivity,
-      logcat: this.logcatState,
+      logcat: this.logcat?.currentState ?? "stopped",
       startedAt: this.startedAt,
       lastLogAt: this.lastLogAt,
       lastCommandAt: this.lastCommandAt,
@@ -133,14 +157,16 @@ export class Session {
   }
 
   /**
-   * Finalize the run: stop timers, write the closing metadata, flush+close all
-   * jsonl streams, release the global lock.
+   * Finalize the run. Four teardown steps, each run unconditionally — a
+   * failure in one must NOT skip the others, or we leak file handles / strand
+   * the lock. Errors are collected and the first is rethrown.
    *
-   * All three teardown steps run unconditionally — a failure in one (e.g. the
-   * metadata write throwing) must NOT skip the others, or we would leak file
-   * handles / strand the lock. Errors are collected and the first is rethrown
-   * so the caller still learns finalize did not fully succeed, while the
-   * cleanup itself is already complete.
+   * Order is load-bearing:
+   *   1. logcat shutdown (§ D-M1) — the worker's last appends must land in
+   *      `logcat.jsonl` / `crash.jsonl` BEFORE step 3 closes those streams.
+   *   2. metadata write — folds in logcat shutdown stats (exit code, bytes).
+   *   3. close the run-folder jsonl streams.
+   *   4. release the global lock.
    */
   async finalize(endStatus: SessionEndStatus, now: Date = new Date()): Promise<void> {
     if (!this.isActive) return;
@@ -148,12 +174,31 @@ export class Session {
     this.timers.stop();
 
     const errors: unknown[] = [];
+    let logcatPatch: (current: Metadata) => Metadata = (c) => c;
+    if (this.logcat !== null) {
+      try {
+        const info = await this.logcat.shutdown();
+        logcatPatch = (current) => ({
+          ...current,
+          exitCode: info.exitCode,
+          signalCode: info.signalCode,
+          killed: info.killed,
+          bytesRead: info.bytesRead,
+          linesParsed: info.linesParsed,
+          logcatBuffer: {
+            ...current.logcatBuffer,
+            effective: info.bufferInfo.effective,
+            error: info.bufferInfo.error,
+          },
+        });
+      } catch (err) {
+        errors.push(err);
+      }
+    }
     try {
-      await this.patchMetadata((current) => ({
-        ...current,
-        closedAt: now.toISOString(),
-        status: endStatus,
-      }));
+      await this.patchMetadata((current) =>
+        logcatPatch({ ...current, closedAt: now.toISOString(), status: endStatus }),
+      );
     } catch (err) {
       errors.push(err);
     }

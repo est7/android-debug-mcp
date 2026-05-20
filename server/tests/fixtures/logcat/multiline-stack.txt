@@ -1,0 +1,8 @@
+05-20 10:16:00.100 10100  4567  4567 D MyApp   : about to do risky thing
+05-20 10:16:00.205 10100  4567  4567 W System.err: java.lang.IllegalStateException: bad state
+	at com.example.app.Repo.load(Repo.kt:42)
+	at com.example.app.MainActivity.onCreate(MainActivity.kt:18)
+Caused by: java.io.IOException: disk gone
+	at com.example.app.Disk.read(Disk.kt:9)
+	... 7 more
+05-20 10:16:00.400 10100  4567  4567 I MyApp   : recovered

@@ -10,6 +10,7 @@ import {
 } from "../../adb/app.ts";
 import { listDevices } from "../../adb/devices.ts";
 import { getGitInfo } from "../../host/git.ts";
+import { DEFAULT_LOGCAT_BUFFER_SIZE } from "../../logcat/spawn.ts";
 import type { SessionManager } from "../../session/manager.ts";
 import { IdentityError, assertSafePackageName } from "../../store/identity.ts";
 import { resolveRunRoot } from "../../store/paths.ts";
@@ -154,6 +155,14 @@ export function registerStartSession(server: McpServer, manager: SessionManager)
           });
           if (pid !== null) session.setPids([pid]);
         }
+
+        // Spawn the logcat dual channel. `-T <session start>` means a slightly
+        // late spawn still replays from session start, so doing this after
+        // launchOnStart (to seed the launched pid) loses nothing.
+        await session.startLogcat({
+          requestedBufferSize: input.logcatBufferSize ?? DEFAULT_LOGCAT_BUFFER_SIZE,
+          seedPids: pid !== null ? [pid] : [],
+        });
 
         await session.appendEvent({
           type: "lifecycle",

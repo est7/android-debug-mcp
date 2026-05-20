@@ -1,0 +1,5 @@
+05-20 10:20:00.001 10100  4567  4567 I MyApp   : tight loop start
+05-20 10:20:00.050  1000   932   932 I chatty  : uid=10100(com.example.app) MyApp identical 47 lines
+05-20 10:20:00.300 10100  4567  4567 I MyApp   : tight loop chunk done
+05-20 10:20:00.350  1000   932   932 I chatty  : uid=10100(com.example.app) MyApp expire 12 lines
+05-20 10:20:00.600 10100  4567  4567 I MyApp   : tight loop end

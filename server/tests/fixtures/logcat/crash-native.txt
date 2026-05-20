@@ -1,0 +1,6 @@
+05-20 10:18:20.500  1000   210   210 F libc    : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 4567 (com.example.app)
+05-20 10:18:20.700  1000  4600  4600 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+05-20 10:18:20.700  1000  4600  4600 F DEBUG   : Build fingerprint: 'Redmi/alioth/alioth:13/TKQ1.221114.001/V816:user/release-keys'
+05-20 10:18:20.700  1000  4600  4600 F DEBUG   : signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0
+05-20 10:18:20.700  1000  4600  4600 F DEBUG   :     #00 pc 0000000000012345  /data/app/com.example.app/lib/arm64/libnative.so
+05-20 10:18:20.900  1000   932   932 I ActivityManager: Process com.example.app (pid 4567) has died

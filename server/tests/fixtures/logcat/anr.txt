@@ -1,0 +1,6 @@
+05-20 10:19:30.100 10100  4567  4567 I MyApp   : starting long blocking work on main thread
+05-20 10:19:35.220  1000   932   970 E ActivityManager: ANR in com.example.app (com.example.app/.MainActivity)
+05-20 10:19:35.220  1000   932   970 E ActivityManager: PID: 4567
+05-20 10:19:35.220  1000   932   970 E ActivityManager: Reason: Input dispatching timed out
+05-20 10:19:35.220  1000   932   970 E ActivityManager: Load: 8.1 / 7.4 / 6.9
+05-20 10:19:35.400  1000   932   970 I ActivityManager: Process com.example.app (pid 4567) is not responding

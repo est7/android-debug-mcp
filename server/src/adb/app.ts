@@ -51,6 +51,26 @@ export async function getCurrentUser(deviceSerial: string): Promise<number> {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
+/**
+ * Resolve the app's Linux uid (§ C-2) from `dumpsys package <pkg>`. Returned as
+ * a string so it can be compared directly against logcat's `-v uid` column.
+ * Null when the package is not installed for that user or `userId=` is absent.
+ */
+export async function getAppUid(
+  deviceSerial: string,
+  packageName: string,
+  userId: number,
+): Promise<string | null> {
+  const res = await runAdb(
+    ["-s", deviceSerial, "shell", "dumpsys", "package", ...userArgs(userId), packageName],
+    { timeoutMs: 10_000, allowNonZero: true },
+  );
+  if (res.exitCode !== 0) return null;
+  // The package's record carries `userId=<uid>` (the shared appId/uid).
+  const uid = /\buserId=(\d+)/.exec(res.stdout)?.[1] ?? null;
+  return uid;
+}
+
 /** Parse `versionName` / `versionCode` out of `dumpsys package <pkg>`. */
 export async function getPackageVersion(
   deviceSerial: string,

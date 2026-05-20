@@ -29,7 +29,27 @@ vi.mock("../../src/adb/app.ts", () => ({
     buildFingerprint: "fp",
   }),
   getAppPids: async () => [],
+  getAppUid: async () => "10100",
   launchApp: async () => ({ launched: false, detail: "mock: not launched" }),
+}));
+
+// The logcat channel spawns a real `adb logcat` child; stub it so the tool
+// test does not need a device. Lifecycle behavior is covered by the logcat
+// unit tests + the Phase 4 real-device probe.
+vi.mock("../../src/logcat/channel.ts", () => ({
+  LogcatChannel: {
+    start: async () => ({
+      currentState: "running",
+      shutdown: async () => ({
+        exitCode: 0,
+        signalCode: null,
+        killed: false,
+        bytesRead: 0,
+        linesParsed: 0,
+        bufferInfo: { requested: "16M", effective: null, buffers: [], error: null },
+      }),
+    }),
+  },
 }));
 
 let scratch = "";

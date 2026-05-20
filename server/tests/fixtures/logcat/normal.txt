@@ -1,0 +1,9 @@
+--------- beginning of main
+05-20 10:15:49.820 10100  4567  4567 I MyApp   : Application onCreate
+05-20 10:15:49.821 10100  4567  4567 D MyApp   : config loaded
+05-20 10:15:49.905  1000   932   932 I ActivityManager: Start proc 4567:com.example.app/u0a100 for top-activity
+05-20 10:15:50.110 10100  4567  4590 W MyApp   : slow query took 240ms
+05-20 10:15:50.330 10100  4567  4567 E MyApp   : failed to load avatar
+--------- beginning of system
+05-20 10:15:50.500  1000   932   948 I ActivityManager: Displayed com.example.app/.MainActivity
+05-20 10:15:51.001 10100  4567  4567 V MyApp   : tick
