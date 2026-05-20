@@ -1,5 +1,7 @@
 # android-debug-mcp
 
+> 中文文档:[readme-zh.md](./readme-zh.md)
+
 A local **stdio MCP server** for **Android application-layer debug evidence
 collection**. It gives an MCP agent a session-scoped, audited way to drive a
 real device over `adb` — launch an app, reproduce a bug, interact with the
