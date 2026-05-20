@@ -1,0 +1,59 @@
+import { readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { ToolDomainError } from "../mcp/toolError.ts";
+import type { SessionManager } from "../session/manager.ts";
+import { METADATA_FILENAME } from "./metadata.ts";
+import { resolveRunRoot } from "./paths.ts";
+
+/**
+ * Resolve a runId to its on-disk run directory.
+ *
+ * The Phase 7 evidence tools (`search_logs` / `extract_crash_context` /
+ * `get_run_summary`) take a runId for a run that may still be active OR long
+ * finalized. A runId is a timestamp + random suffix ({@link mintRunId}) and
+ * carries no package / userId, so a finalized run can only be found by walking
+ * `<runRoot>/<package>/u<userId>/<runId>/`.
+ *
+ * Active sessions are matched first — cheap, and authoritative for their
+ * runDir regardless of which runRoot they were created under. Otherwise the
+ * *current* runRoot is scanned: a run created under a different runRoot is not
+ * found, which is acceptable for v1 (the runRoot is stable within a deployment).
+ */
+export async function resolveRunDir(manager: SessionManager, runId: string): Promise<string> {
+  for (const session of manager.listActive()) {
+    if (session.runId === runId) return session.runDir;
+  }
+  const { runRoot } = resolveRunRoot();
+  const found = await scanForRun(runRoot, runId);
+  if (found !== null) return found;
+  throw new ToolDomainError("run_missing", `No run found for runId ${runId}.`, { runId });
+}
+
+/** Walk `<runRoot>/<package>/u<userId>/` looking for a `<runId>/` with metadata. */
+async function scanForRun(runRoot: string, runId: string): Promise<string | null> {
+  for (const pkg of await safeReaddir(runRoot)) {
+    const pkgDir = join(runRoot, pkg);
+    for (const userDir of await safeReaddir(pkgDir)) {
+      const candidate = join(pkgDir, userDir, runId);
+      if (await hasMetadata(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+async function hasMetadata(runDir: string): Promise<boolean> {
+  try {
+    return (await stat(join(runDir, METADATA_FILENAME))).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function safeReaddir(dir: string): Promise<string[]> {
+  try {
+    return await readdir(dir);
+  } catch (err) {
+    if ((err as { code?: unknown }).code === "ENOENT") return [];
+    throw err;
+  }
+}

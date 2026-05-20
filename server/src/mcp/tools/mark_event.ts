@@ -1,3 +1,5 @@
+import { stat } from "node:fs/promises";
+import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { SessionManager } from "../../session/manager.ts";
@@ -7,6 +9,21 @@ import { ok, runIdInput, touch } from "./_shared.ts";
 
 /** § E-m3: JSON-serialized payload ceiling. */
 const MAX_PAYLOAD_BYTES = 16 * 1024;
+
+/**
+ * Byte size of the run's `logcat.jsonl` at mark time — the anchor `search_logs`
+ * resolves `beforeMark` / `afterMark` against. Byte offset (not a timestamp)
+ * because logcat lines carry a device clock that cannot be soundly compared to
+ * the host-clock event `ts`. Null when logcat has produced no file yet (the
+ * mark precedes every log line).
+ */
+async function logcatOffset(runDir: string): Promise<number | null> {
+  try {
+    return (await stat(join(runDir, "logcat.jsonl"))).size;
+  } catch {
+    return null;
+  }
+}
 
 const inputSchema = z
   .object({
@@ -63,10 +80,11 @@ export function registerMarkEvent(server: McpServer, manager: SessionManager): v
         }
       }
 
+      const offset = await logcatOffset(session.runDir);
       const ts = await session.appendEvent(
         input.payload !== undefined
-          ? { type: "mark", name: input.name, payload: input.payload }
-          : { type: "mark", name: input.name },
+          ? { type: "mark", name: input.name, payload: input.payload, logcatOffset: offset }
+          : { type: "mark", name: input.name, logcatOffset: offset },
       );
       return ok({ ts, name: input.name });
     },

@@ -32,6 +32,9 @@ export const TOOL_ERROR_CODES = {
   confirmation_required: "confirmation_required",
   invalid_identity: "invalid_identity",
   app_control_failed: "app_control_failed",
+  invalid_cursor: "invalid_cursor",
+  mark_not_found: "mark_not_found",
+  invalid_argument: "invalid_argument",
 } as const;
 
 export type ToolErrorCode = (typeof TOOL_ERROR_CODES)[keyof typeof TOOL_ERROR_CODES];

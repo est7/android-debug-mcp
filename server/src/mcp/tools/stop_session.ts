@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { SessionManager } from "../../session/manager.ts";
 import { readMetadata } from "../../store/metadata.ts";
+import { finalizeSummary } from "../../summary/finalize.ts";
 import { registerDebugTool } from "../register.ts";
 import { ok, runIdInput } from "./_shared.ts";
 
@@ -52,6 +53,9 @@ export function registerStopSession(server: McpServer, manager: SessionManager):
       // where the event write is best-effort so it can never block finalize.
       await manager.stop(session);
       const finalMeta = await readMetadata(session.runDir);
+      // Write summary.md best-effort: the run is already sealed, so a render
+      // failure must not fail the stop — get_run_summary regenerates it anyway.
+      await finalizeSummary(session.runDir).catch(() => undefined);
       return ok({
         runId: session.runId,
         runDir: session.runDir,
