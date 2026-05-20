@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 import { bootstrap } from "./bootstrap.ts";
 
 // Entry point. All wiring — tool registration, orphan recovery, transport

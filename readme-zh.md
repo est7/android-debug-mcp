@@ -21,19 +21,11 @@
 - 仅 `android_debug_input_text` 需要:设备上装好 **ADBKeyBoard** 辅助 APK——
   见 [文本输入](#文本输入adbkeyboard)。
 
-## 安装
-
-```sh
-git clone <this repo>
-cd android-debug-mcp
-bun install
-```
-
-没有构建步骤——server 在 Bun 下直接跑 TypeScript。
-
 ## 接入 MCP host
 
-server 以 stdio 讲 MCP。用 **绝对路径** 把 host 指向 `server/src/server.ts`。
+server 以 stdio 讲 MCP。host 通过 `npx` 直接从这个 GitHub 仓库拉取并运行——
+不用 clone、不用全局安装、无构建步骤。`PATH` 上要有 bun(server 以 TypeScript
+在 Bun 下运行)。
 
 **Claude Code / Cursor** —— 加进 `mcp.json`(Cursor)或 `.mcp.json`(Claude Code):
 
@@ -41,11 +33,8 @@ server 以 stdio 讲 MCP。用 **绝对路径** 把 host 指向 `server/src/serv
 {
   "mcpServers": {
     "android-debug": {
-      "command": "bun",
-      "args": ["/ABS/PATH/TO/android-debug-mcp/server/src/server.ts"],
-      "env": {
-        "ANDROID_DEBUG_MCP_RUN_ROOT": "/ABS/PATH/TO/your-android-project/.android-debug-runs"
-      }
+      "command": "npx",
+      "args": ["-y", "github:est7/android-debug-mcp"]
     }
   }
 }
@@ -54,20 +43,30 @@ server 以 stdio 讲 MCP。用 **绝对路径** 把 host 指向 `server/src/serv
 Claude Code CLI 等价写法:
 
 ```sh
-claude mcp add android-debug \
-  --env ANDROID_DEBUG_MCP_RUN_ROOT=/ABS/PATH/TO/your-android-project/.android-debug-runs \
-  -- bun /ABS/PATH/TO/android-debug-mcp/server/src/server.ts
+claude mcp add android-debug -- npx -y github:est7/android-debug-mcp
 ```
 
-### `ANDROID_DEBUG_MCP_RUN_ROOT`
+`npx` 首次运行会 clone + 安装(几秒),之后走缓存。要锁版本用
+`github:est7/android-debug-mcp#v0.1.0`;不带后缀则跟 `main`。`bunx` 可替代 `npx`。
 
-这个环境变量决定 run 目录落在哪。**建议显式设置**,指到你正在调试的那个 Android
-项目里——这样每个项目的取证数据就跟它的代码放在一起。解析顺序(§ C-3):
+### run 目录位置 —— `ANDROID_DEBUG_MCP_RUN_ROOT`(可选)
+
+默认情况下 server 把 run 目录写到 `<项目>/.android-debug-runs/`——`<项目>` 由
+你启动 MCP host 时所在目录的 `git rev-parse --show-toplevel` 推出。**只要在要
+调试的 Android 项目里启动 host,就无需任何配置。**
+
+只有想覆盖这个默认值时才设 `ANDROID_DEBUG_MCP_RUN_ROOT`。完整解析顺序(§ C-3):
 
 1. `start_session({ projectRoot })` 参数(若给)→ `<projectRoot>/.android-debug-runs/`
 2. `ANDROID_DEBUG_MCP_RUN_ROOT` 环境变量 → 原样采用
-3. server 当前目录的 `git rev-parse --show-toplevel` → `<top>/.android-debug-runs/`
-4. 兜底 → `~/.android-debug-mcp/runs/`
+3. server 当前目录的 `git rev-parse --show-toplevel` → `<top>/.android-debug-runs/`(**即默认值**)
+4. 兜底(cwd 不在 git 仓库内)→ `~/.android-debug-mcp/runs/`
+
+要覆盖,就在上面的配置里加一个 `env` 块:
+
+```json
+"env": { "ANDROID_DEBUG_MCP_RUN_ROOT": "/abs/path/to/runs" }
+```
 
 一个 run 目录是 `<runRoot>/<package>/u<userId>/<runId>/`,内含
 `metadata.json`、`events.jsonl`、`commands.jsonl`、`logcat.jsonl`、
@@ -171,11 +170,17 @@ android-debug-mcp 不碰无障碍树。
 ## 开发
 
 ```sh
+git clone https://github.com/est7/android-debug-mcp
+cd android-debug-mcp
+bun install
+
 bun run typecheck   # tsc --noEmit
 bun run lint        # biome check .
 bun run test        # vitest run
 bun run dev         # 直接跑 stdio server
 ```
+
+没有构建步骤——server 在 Bun 下直接跑 TypeScript。
 
 真机五场景手动 checklist 见 [`docs/test-plan.md`](./docs/test-plan.md)。
 

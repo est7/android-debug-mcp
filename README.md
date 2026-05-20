@@ -24,20 +24,11 @@ Status: **v1 (0.1.0)** — all 17 tools registered; the five acceptance scenario
 - For `android_debug_input_text` only: the **ADBKeyBoard** helper APK installed
   on the device — see [Typing text](#typing-text-adbkeyboard).
 
-## Install
+## Use it — wire into an MCP host
 
-```sh
-git clone <this repo>
-cd android-debug-mcp
-bun install
-```
-
-No build step — the server runs straight from TypeScript under Bun.
-
-## Wire it into an MCP host
-
-The server speaks MCP over stdio. Point your host at `server/src/server.ts`
-with an **absolute path**.
+The server speaks MCP over stdio. Your host fetches and runs it straight from
+this GitHub repo via `npx` — no clone, no global install, no build step. Bun
+must be on `PATH` (the server runs as TypeScript under Bun).
 
 **Claude Code / Cursor** — add to `mcp.json` (Cursor) or `.mcp.json` (Claude Code):
 
@@ -45,11 +36,8 @@ with an **absolute path**.
 {
   "mcpServers": {
     "android-debug": {
-      "command": "bun",
-      "args": ["/ABS/PATH/TO/android-debug-mcp/server/src/server.ts"],
-      "env": {
-        "ANDROID_DEBUG_MCP_RUN_ROOT": "/ABS/PATH/TO/your-android-project/.android-debug-runs"
-      }
+      "command": "npx",
+      "args": ["-y", "github:est7/android-debug-mcp"]
     }
   }
 }
@@ -58,21 +46,33 @@ with an **absolute path**.
 Claude Code CLI equivalent:
 
 ```sh
-claude mcp add android-debug \
-  --env ANDROID_DEBUG_MCP_RUN_ROOT=/ABS/PATH/TO/your-android-project/.android-debug-runs \
-  -- bun /ABS/PATH/TO/android-debug-mcp/server/src/server.ts
+claude mcp add android-debug -- npx -y github:est7/android-debug-mcp
 ```
 
-### `ANDROID_DEBUG_MCP_RUN_ROOT`
+`npx` clones and installs on first run (a few seconds), then caches it. Pin a
+release with `github:est7/android-debug-mcp#v0.1.0`; omit the suffix to track
+`main`. `bunx` works in place of `npx`.
 
-This env var decides where run folders land. **Set it explicitly** to a path
-inside the Android project you are debugging — that keeps each project's
-evidence next to its code. Resolution order (§ C-3):
+### Run folder location — `ANDROID_DEBUG_MCP_RUN_ROOT` (optional)
+
+By default the server writes run folders to `<project>/.android-debug-runs/`,
+finding `<project>` from `git rev-parse --show-toplevel` of the directory your
+MCP host was launched in. **Launch your host inside the Android project you are
+debugging and no configuration is needed.**
+
+Set `ANDROID_DEBUG_MCP_RUN_ROOT` only to override that default. Full
+resolution order (§ C-3):
 
 1. `start_session({ projectRoot })` argument, if given → `<projectRoot>/.android-debug-runs/`
 2. `ANDROID_DEBUG_MCP_RUN_ROOT` env var → taken verbatim
-3. `git rev-parse --show-toplevel` of the server's cwd → `<top>/.android-debug-runs/`
-4. Fallback → `~/.android-debug-mcp/runs/`
+3. `git rev-parse --show-toplevel` of the server's cwd → `<top>/.android-debug-runs/` *(the default)*
+4. Fallback, when cwd is not in a git repo → `~/.android-debug-mcp/runs/`
+
+To override, add an `env` block to the config above:
+
+```json
+"env": { "ANDROID_DEBUG_MCP_RUN_ROOT": "/abs/path/to/runs" }
+```
 
 A run folder is `<runRoot>/<package>/u<userId>/<runId>/` and holds
 `metadata.json`, `events.jsonl`, `commands.jsonl`, `logcat.jsonl`,
@@ -179,13 +179,18 @@ its own concern, and android-debug-mcp does not touch the accessibility tree.
 ## Development
 
 ```sh
+git clone https://github.com/est7/android-debug-mcp
+cd android-debug-mcp
+bun install
+
 bun run typecheck   # tsc --noEmit
 bun run lint        # biome check .
 bun run test        # vitest run
 bun run dev         # run the stdio server directly
 ```
 
-See [`docs/test-plan.md`](./docs/test-plan.md) for the manual 5-scenario device
+No build step — the server runs straight from TypeScript under Bun. See
+[`docs/test-plan.md`](./docs/test-plan.md) for the manual 5-scenario device
 checklist.
 
 ## Documents
