@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { SessionManager } from "../../session/manager.ts";
-import { readMetadata } from "../../store/metadata.ts";
+import { RunStatusSchema, readMetadata } from "../../store/metadata.ts";
 import { finalizeSummary } from "../../summary/finalize.ts";
 import { registerDebugTool } from "../register.ts";
 import { ok, runIdInput } from "./_shared.ts";
@@ -16,7 +16,7 @@ const outputSchema = z
   .object({
     runId: z.string(),
     runDir: z.string(),
-    status: z.enum(["stopped", "aborted"]),
+    status: RunStatusSchema,
     crashFound: z.boolean(),
     summary: z.string(),
   })
@@ -56,10 +56,14 @@ export function registerStopSession(server: McpServer, manager: SessionManager):
       // Write summary.md best-effort: the run is already sealed, so a render
       // failure must not fail the stop — get_run_summary regenerates it anyway.
       await finalizeSummary(session.runDir).catch(() => undefined);
+      // Report the run's ACTUAL terminal status — a session degraded by a
+      // device disconnect finalizes `degraded`, and `stop_session` must not
+      // flatten that to `stopped` (it would diverge from metadata /
+      // get_run_summary).
       return ok({
         runId: session.runId,
         runDir: session.runDir,
-        status: finalMeta.status === "aborted" ? "aborted" : "stopped",
+        status: finalMeta.status,
         crashFound: finalMeta.crashFound,
         summary: `Session ${session.runId} stopped (status=${finalMeta.status}). Full report: android_debug_get_run_summary.`,
       });

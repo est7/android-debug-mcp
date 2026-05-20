@@ -19,6 +19,7 @@ import { registerStopSession } from "./mcp/tools/stop_session.ts";
 import { registerSwipe } from "./mcp/tools/swipe.ts";
 import { registerTap } from "./mcp/tools/tap.ts";
 import { recoverOrphans } from "./recovery/scan.ts";
+import { HealthMonitor } from "./session/health.ts";
 import { SessionManager } from "./session/manager.ts";
 import { resolveRunRoot } from "./store/paths.ts";
 import { VERSION } from "./version.ts";
@@ -53,6 +54,11 @@ export async function bootstrap(): Promise<void> {
   } catch (err) {
     rootLog.error("orphan recovery scan failed; serving anyway", { error: String(err) });
   }
+
+  // Device-connectivity poll: flips a session to `degraded` when its device
+  // drops. Runs for the server's lifetime; the timer is unref'd so it never
+  // keeps the process alive on its own.
+  new HealthMonitor(manager).start();
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

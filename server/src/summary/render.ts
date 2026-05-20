@@ -86,6 +86,8 @@ function describeEvent(e: Record<string, unknown>): string {
       return `capture ${Array.isArray(e.kinds) ? e.kinds.join("+") : "?"}`;
     case "auto_stopped_by_timeout":
       return `auto-stopped — ${asString(e.reason) ?? "?"}`;
+    case "device_disconnected":
+      return `device disconnected — ${asString(e.deviceSerial) ?? "?"}`;
     case "logd_dropped":
       return `logd dropped ${asNumber(e.count)} lines`;
     case "abnormal_long_line":

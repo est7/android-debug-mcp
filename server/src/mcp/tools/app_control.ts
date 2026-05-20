@@ -4,7 +4,7 @@ import { forceStopApp, getAppPids, launchApp } from "../../adb/app.ts";
 import type { SessionManager } from "../../session/manager.ts";
 import type { Session } from "../../session/session.ts";
 import { registerDebugTool } from "../register.ts";
-import { ok, runIdInput, touch } from "./_shared.ts";
+import { ok, requireConnectedSession, runIdInput, touch } from "./_shared.ts";
 
 const inputSchema = z
   .object({
@@ -28,7 +28,7 @@ const description = [
   "Use when: the agent needs to bring the app to a known state during a debug run. Data-clearing is intentionally NOT here — use `android_debug_clear_app_data`.",
   "Args: `runId`; `action` one of `launch` | `restart` | `stop`.",
   "Returns: `{action, launched, pids, detail}` — `launched` is true when the app was (re)started, `pids` is the app's process ids observed afterwards.",
-  "Errors: `no_active_session` for an unknown runId. Launch failures are reported in `detail` with `launched:false` rather than thrown.",
+  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session's device has dropped. Launch failures are reported in `detail` with `launched:false` rather than thrown.",
 ].join("\n");
 
 export function registerAppControl(server: McpServer, manager: SessionManager): void {
@@ -48,7 +48,7 @@ export function registerAppControl(server: McpServer, manager: SessionManager): 
       },
     },
     async (input) => {
-      const session = manager.require(input.runId);
+      const session = requireConnectedSession(manager, input.runId);
       touch(session);
 
       let launched = false;

@@ -9,7 +9,7 @@ import {
 } from "../../adb/app.ts";
 import type { SessionManager } from "../../session/manager.ts";
 import { registerDebugTool } from "../register.ts";
-import { ok, runIdInput, sessionStatusSchema } from "./_shared.ts";
+import { ok, requireConnectedSession, runIdInput, sessionStatusSchema } from "./_shared.ts";
 
 const inputSchema = z
   .object({
@@ -45,7 +45,7 @@ const description = [
   "Use when: the agent needs to know whether the app is running / foregrounded, or wants the post-mortem `exit-info` after a suspected crash.",
   "Args: `runId`.",
   "Returns: `{activity, foreground, pids, versionName, versionCode, abi, exitInfo[], sessionStatus}`. This tool is read-only and does not reset the session's idle timer.",
-  "Errors: `no_active_session` for an unknown runId.",
+  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session's device has dropped.",
 ].join("\n");
 
 export function registerGetAppState(server: McpServer, manager: SessionManager): void {
@@ -65,7 +65,7 @@ export function registerGetAppState(server: McpServer, manager: SessionManager):
       },
     },
     async (input) => {
-      const session = manager.require(input.runId);
+      const session = requireConnectedSession(manager, input.runId);
       // Read-only: intentionally does NOT touch the idle timer (§ timers —
       // idle reset is for interaction, not queries).
 

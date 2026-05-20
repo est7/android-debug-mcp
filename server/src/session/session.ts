@@ -170,7 +170,12 @@ export class Session {
    */
   async finalize(endStatus: SessionEndStatus, now: Date = new Date()): Promise<void> {
     if (!this.isActive) return;
-    this.status = endStatus;
+    // A session that went `degraded` keeps that as its terminal status — the
+    // run did not end cleanly, its device dropped. Only an `active` session
+    // adopts the caller's stopped / aborted end status (§ design-lock: a
+    // disconnect run's summary reports `degraded`).
+    const finalStatus = this.status === "degraded" ? "degraded" : endStatus;
+    this.status = finalStatus;
     this.timers.stop();
 
     const errors: unknown[] = [];
@@ -197,7 +202,7 @@ export class Session {
     }
     try {
       await this.patchMetadata((current) =>
-        logcatPatch({ ...current, closedAt: now.toISOString(), status: endStatus }),
+        logcatPatch({ ...current, closedAt: now.toISOString(), status: finalStatus }),
       );
     } catch (err) {
       errors.push(err);
