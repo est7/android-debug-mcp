@@ -6,6 +6,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureUiDump } from "../../src/adb/capture.ts";
+import { AdbExecError } from "../../src/adb/errors.ts";
 import { inputTap } from "../../src/adb/input.ts";
 import { registerStartSession } from "../../src/mcp/tools/start_session.ts";
 import { registerTapNode } from "../../src/mcp/tools/tap_node.ts";
@@ -207,5 +208,41 @@ describe("android_debug_tap_node", () => {
     });
     expect(r.isError).toBe(true);
     expect(JSON.parse(callText(r)).error).toBe("no_active_session");
+  });
+
+  it("fails with ui_dump_failed when the dumped XML is unparseable, and does NOT tap", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    vi.mocked(captureUiDump).mockResolvedValue({
+      ok: true,
+      xml: '<hierarchy><node class="X" package="p"></hierarchy>',
+      detail: "ok",
+    });
+    const r = await h.client.callTool({
+      name: "android_debug_tap_node",
+      arguments: { runId, x: 200, y: 150 },
+    });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(callText(r)).error).toBe("ui_dump_failed");
+    expect(vi.mocked(inputTap)).not.toHaveBeenCalled();
+  });
+
+  it("writes no tap_node event when the tap itself fails — the event implies the tap happened", async () => {
+    const h = await harness();
+    const { runId, runDir } = await startRun(h);
+    vi.mocked(captureUiDump).mockResolvedValue({ ok: true, xml: XML_WITH_ANCHOR, detail: "ok" });
+    vi.mocked(inputTap).mockRejectedValueOnce(
+      new AdbExecError(["shell", "input", "tap"], 1, "", "tap failed"),
+    );
+    const r = await h.client.callTool({
+      name: "android_debug_tap_node",
+      arguments: { runId, x: 200, y: 150 },
+    });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(callText(r)).error).toBe("adb_command_failed");
+    const raw = readFileSync(join(runDir, "events.jsonl"), "utf8").trim();
+    const events =
+      raw === "" ? [] : raw.split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(events.some((e) => e.type === "tap_node")).toBe(false);
   });
 });

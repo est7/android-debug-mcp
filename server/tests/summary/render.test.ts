@@ -78,6 +78,24 @@ describe("renderSummary", () => {
     expect(md).toContain("input_text — 8 chars (redacted)");
   });
 
+  it("describes a tap_node event with its source anchor", () => {
+    const md = renderSummary(
+      makeRunData({
+        events: [
+          {
+            type: "tap_node",
+            ts: "T4",
+            x: 100,
+            y: 200,
+            anchorNode: { resourceId: "com.example.app:id/login" },
+            label: "Login",
+          },
+        ],
+      }),
+    );
+    expect(md).toContain("tap_node (100, 200) → com.example.app:id/login — Login");
+  });
+
   it("caps the timeline and notes how many events were omitted", () => {
     const events = Array.from({ length: 250 }, (_, i) => ({
       type: "mark",

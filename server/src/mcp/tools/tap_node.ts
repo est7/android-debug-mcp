@@ -74,7 +74,7 @@ const description = [
   "Use when: driving a tap-to-source debug flow — you need to know which view (and its resource-id source anchor) sits under a coordinate, not merely to dispatch the tap. For a plain tap with no node resolution, use `android_debug_tap`.",
   "Args: `runId`; `x` / `y` pixel coordinates (0-20000); optional `label` recorded in events.jsonl.",
   "Returns: `{ts, preTapCaptureId, preTapForegroundActivity, tappedNode, anchorNode, anchorSource, ancestorChain}` — the tapped node, its nearest app-package resource-id anchor (`null` when none), and the strict ancestor chain. The pre-tap UI hierarchy is saved to `artifacts/ui-<captureId>.xml`.",
-  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `ui_dump_failed` when the pre-tap `uiautomator dump` fails or is unparseable (the tap is NOT performed); `invalid_argument` when the coordinate is outside the captured UI (the tap is NOT performed); `adb_command_failed` when an adb command fails.",
+  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `ui_dump_failed` when the pre-tap `uiautomator dump` fails or is unparseable (the tap is NOT performed); `invalid_argument` when the coordinate is outside the captured UI (the tap is NOT performed); `adb_not_found` when the adb binary is missing; `adb_command_failed` when an adb command fails.",
 ].join("\n");
 
 /** Project a parsed `UiNode` to the event shape — drops `children`. */
