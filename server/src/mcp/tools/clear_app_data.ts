@@ -26,7 +26,7 @@ const description = [
   "Use when: the agent deliberately wants a clean-slate app state. This is a separate tool from `android_debug_app_control` precisely so the destructive hint is unambiguous.",
   "Args: `runId`; `confirm` — must be the boolean `true`, an explicit acknowledgement that data loss is intended.",
   "Returns: `{cleared, detail}` — `cleared` reflects whether `pm clear` reported success.",
-  "Errors: `confirmation_required` when `confirm` is not `true`; `no_active_session` for an unknown runId; `device_disconnected` when the session's device has dropped; `adb_command_failed` when the `pm clear` command fails.",
+  "Errors: `confirmation_required` when `confirm` is not `true`; `no_active_session` for an unknown runId; `device_disconnected` when the session's device has dropped; `adb_not_found` when the adb binary is missing; `adb_command_failed` when the `pm clear` command fails.",
 ].join("\n");
 
 export function registerClearAppData(server: McpServer, manager: SessionManager): void {

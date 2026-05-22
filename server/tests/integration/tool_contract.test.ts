@@ -78,6 +78,18 @@ describe("v1 tool inventory", () => {
       expect(tool.description ?? "").toContain("adb_command_failed");
     }
   });
+
+  // Same contract for `adb_not_found` — every adb-touching tool resolves the
+  // adb binary and can surface this code, so its description must name it.
+  it("every adb-touching tool documents `adb_not_found` in its description", async () => {
+    const client = await harness();
+    const { tools } = await client.listTools();
+    const seen = tools.filter((t) => ADB_TOUCHING_TOOLS.has(t.name));
+    expect(seen.length).toBe(ADB_TOUCHING_TOOLS.size);
+    for (const tool of seen) {
+      expect(tool.description ?? "").toContain("adb_not_found");
+    }
+  });
 });
 
 /** Tools whose handler reaches an adb subprocess (and so can surface `adb_command_failed`). */
