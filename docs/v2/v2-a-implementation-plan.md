@@ -132,10 +132,19 @@ v1 是 Phase 0–13。v2-A 重新从 Phase 0 起编号;源文件落 `server/src/
 - `server/src/source/rg.ts` — `rg` PATH resolve(对标 v1 `getAdbPath`:
   `RG_PATH` env → `which rg`,缺失抛 `RgNotFoundError`);`runRg(args,
   {timeoutMs})`,超时 → `search_timed_out`。
-- `server/src/source/recipe.ts` — `resolveCandidates(resourceId,
-  projectRoot)`:entry name 派生 pattern(`@+id/` / `R.id.` / ViewBinding
-  camelCase / `R.layout.`);排除 `build/` 等生成目录。**输出 `SourceCandidate`
-  含 `kind` 分类**(见 2.2)。
+- `server/src/source/recipe.ts` — `resolveCandidates(resourceId, projectRoot)`。
+  `submodulepoppo` 扫描确认 Poppo 是 **ViewBinding-only**(无 `findViewById`、无
+  kotlin synthetics、DataBinding 声明了但未用),recipe 据此:
+  - `android:id="@+id/<name>"` → 布局 XML 的 id 声明(`kind: id_declaration`)。
+  - `binding.<camelCase(name)>` → Kotlin/Java 代码引用(`kind: code_ref`);
+    snake_case id 先转 lowerCamel(`face_mask_top` → `faceMaskTop`),已是 camel
+    的原样。**不搜 `R.id.xxx` / `findViewById`** —— Poppo 不用。
+  - 布局文件名 → binding 类名(`activity_homepage_3.xml` →
+    `ActivityHomepage3Binding`)→ `rg` 找 `BaseBindingActivity<XxxBinding>` /
+    `BaseBindingFragment<XxxBinding>` 的那个类(`kind: screen_owner`)。**不是
+    `R.layout.xxx`** —— Poppo 用泛型类型参数 + 反射 inflate,代码里无 `R.layout`。
+  - 排除 `build/` 等生成目录(生成的 `*Binding` 类会淹没真实引用)。
+  **输出 `SourceCandidate` 含 `kind` 分类**(见 2.2)。
 - `server/src/source/project_root.ts` — 读 run 的 `metadata.projectRoot`;
   为 `null` → 调用方据此返回硬错 `project_root_missing`。
 
