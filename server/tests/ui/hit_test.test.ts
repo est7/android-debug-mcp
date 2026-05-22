@@ -125,3 +125,40 @@ describe("resolveTap — anchor selection", () => {
     expect(resolveTap(parseUiHierarchy(xml), 500, 500, "p")).toBeNull();
   });
 });
+
+describe("resolveTap — clickable scrim vs transparent overlay", () => {
+  // One window: Main content + a later, full-screen clickable Scrim sibling
+  // whose Sheet child sits elsewhere. The modal-scrim false-positive codex
+  // caught — a same-window clickable hollow overlay must NOT pass through.
+  const scrimXml =
+    "<hierarchy>" +
+    '<node class="Root" package="p" bounds="[0,0][100,100]">' +
+    '<node class="Main" package="p" bounds="[0,0][100,100]">' +
+    '<node class="MainBtn" package="p" resource-id="p:id/main_btn" bounds="[0,0][100,100]" /></node>' +
+    '<node class="Scrim" package="p" resource-id="p:id/scrim" clickable="true" bounds="[0,0][100,100]">' +
+    '<node class="Sheet" package="p" resource-id="p:id/sheet" bounds="[0,60][100,100]" /></node>' +
+    "</node></hierarchy>";
+
+  it("a clickable hollow scrim consumes the tap, not the content beneath", () => {
+    const r = resolveTap(parseUiHierarchy(scrimXml), 20, 20, "p");
+    expect(r?.tappedNode.resourceId).toBe("p:id/scrim");
+  });
+
+  it("a tap on the sheet still resolves into the sheet", () => {
+    const r = resolveTap(parseUiHierarchy(scrimXml), 50, 80, "p");
+    expect(r?.tappedNode.resourceId).toBe("p:id/sheet");
+  });
+
+  it("a non-clickable hollow overlay still passes through to the content", () => {
+    const xml =
+      "<hierarchy>" +
+      '<node class="Root" package="p" bounds="[0,0][100,100]">' +
+      '<node class="Main" package="p" bounds="[0,0][100,100]">' +
+      '<node class="MainBtn" package="p" resource-id="p:id/main_btn" bounds="[0,0][100,100]" /></node>' +
+      '<node class="Overlay" package="p" resource-id="p:id/overlay" clickable="false" bounds="[0,0][100,100]">' +
+      '<node class="Corner" package="p" resource-id="p:id/corner" bounds="[90,90][100,100]" /></node>' +
+      "</node></hierarchy>";
+    const r = resolveTap(parseUiHierarchy(xml), 20, 20, "p");
+    expect(r?.tappedNode.resourceId).toBe("p:id/main_btn");
+  });
+});

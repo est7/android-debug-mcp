@@ -10,12 +10,14 @@
  *  2. Descend, topmost child first (latest document order = topmost z-order).
  *     Commit to the first child that itself has a containing child (recurse)
  *     or is a leaf (the answer). A "hollow" non-leaf child — it contains the
- *     point but none of its children do — is used only as a fallback when no
- *     sibling offers a deeper path. This passes a transparent full-screen
- *     overlay through to the real content beneath it, while still keeping a
- *     genuinely-tapped empty container when there is no alternative. Neither
- *     "globally deepest node" nor "always the last containing child" survives
- *     a real dump — both were tried against `poppo-homepage.xml` and failed.
+ *     point but none of its children do — wins outright when it is clickable
+ *     (an interactive scrim / click-catcher Android dispatches the tap to);
+ *     a non-clickable hollow child is used only as a fallback when no sibling
+ *     offers a deeper path. So a transparent overlay passes through to the
+ *     content beneath, a modal scrim correctly stops the tap, and a
+ *     genuinely-tapped empty container is kept when no alternative exists.
+ *     Neither "globally deepest node" nor "always the last containing child"
+ *     survives a real dump — both were tried and failed.
  *  3. The anchor is chosen only after the tapped node is fixed: the nearest
  *     node in [tappedNode, ...ancestors] whose resource-id belongs to the
  *     session package. Framework ids (`android:id/*`) never anchor.
@@ -101,8 +103,14 @@ function descend(node: UiNode, x: number, y: number, ancestors: UiNode[]): Hit {
     if (child.children.length === 0) {
       return { node: child, chain: childAncestors };
     }
-    // Hollow non-leaf — a transparent container with nothing of its own here.
-    // Keep only as a last resort so an overlay falls through to real content.
+    // Hollow non-leaf — contains the point but no child does. A clickable one
+    // is an interactive scrim / click-catcher (modal backdrop, bottom-sheet
+    // scrim): Android dispatches the tap to it, so it wins outright. A
+    // non-clickable one is a transparent container — keep it only as a last
+    // resort so an overlay falls through to the real content beneath.
+    if (child.clickable) {
+      return { node: child, chain: childAncestors };
+    }
     if (hollowFallback === null) hollowFallback = child;
   }
 

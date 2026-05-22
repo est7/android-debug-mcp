@@ -51,18 +51,26 @@ v1 是 Phase 0–13。v2-A 重新从 Phase 0 起编号;源文件落 `server/src/
 - `server/tests/ui/hierarchy.test.ts` / `hit_test.test.ts` +
   `server/tests/fixtures/ui/*.xml`。
 
-**hit-test tie-break 规则(实施前定死,由 fixture 锁住)**
+**hit-test tie-break 规则(实施 + 真机 fixture + codex audit 后定形)**
 
-`tappedNode` 选取不是"最小包含节点"一句能覆盖的,真机 dump 有歧义。规则:
+原 plan 写的"深度优先 / 最深 leaf"规则被真机 dump 否掉(全屏 `face_container` 里
+更深的 `ivAvatarFace` 会盖过 top-bar 的 backButton);"无脑进最后包含子节点"又会扎
+进透明 overlay 死掉。最终规则(见 `hit_test.ts`):
 
-1. **候选过滤**:只保留 `bounds` 有效(非负、`right>left`、`bottom>top`、
-   非全 0)且包含 `(x,y)` 的节点。非法 / 缺失 bounds 的节点直接排除,不参与。
-2. **多窗口(dialog 浮层)**:XML 可能有多个 root。只在**最顶层窗口**子树里找
-   (前台窗口);非顶层窗口的节点不参与 hit-test。
-3. **深度优先**:候选里取**最深 leaf**。
-4. **等深 / 等 bounds 平手**:走文档化的 XML 遍历序规则(后出现者 = z-order 更
-   上层,优先)—— 该规则由 fixture 观察后写死,不留实现自由度。
-5. `anchorNode` 只在 `tappedNode` 定下来之后,沿祖先链向上选(Q4)。
+1. **候选过滤**:`bounds` 非 null、`right>left`、`bottom>top`(退化矩形天然不含
+   任何点)。**负坐标合法** —— 部分滚出屏的 view 边界可为负,半开包含判定
+   `[l,r)×[t,b)` 天然正确处理,不额外排除。
+2. **多窗口**:`<hierarchy>` 可有多个 root。取**文档序最后一个**(z-order 最上层)
+   且包含 `(x,y)` 的 root,只在它子树里找。
+3. **逐层下降,topmost-first**:每层按文档序倒序(后绘制在上)遍历包含 `(x,y)` 的
+   子节点;commit 到第一个「自身还有包含子节点(递归下降)或本身是叶子(即答案)」
+   的子节点。
+4. **空心非叶 = 透明容器 / scrim**:一个包含该点、但子节点都不包含的非叶节点 ——
+   `clickable=true` 则是交互式 scrim / 点击拦截层(modal 遮罩、bottom-sheet
+   scrim),Android 把 tap 派发给它,**直接胜出**;非 clickable 则是透明容器,仅在
+   无更深兄弟可选时作 fallback,让透明 overlay 穿透到下层真实内容。
+5. `anchorNode` 在 `tappedNode` 定下后,沿 `[tappedNode, ...祖先]` 取最近一个
+   resource-id 属于 session 包名的节点;framework id(`android:id/*`)不作锚点(Q4)。
 
 **Fixtures(至少覆盖)**:普通屏、dialog 浮层多 root、父子等 bounds、兄弟 bounds
 重叠、RecyclerView 行复用、无有效 app id 节点。
