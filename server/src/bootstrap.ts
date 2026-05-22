@@ -11,6 +11,7 @@ import { registerGetRunSummary } from "./mcp/tools/get_run_summary.ts";
 import { registerInputText } from "./mcp/tools/input_text.ts";
 import { registerListDevices } from "./mcp/tools/list_devices.ts";
 import { registerListRuns } from "./mcp/tools/list_runs.ts";
+import { registerMapUiNodeToSource } from "./mcp/tools/map_ui_node_to_source.ts";
 import { registerMarkEvent } from "./mcp/tools/mark_event.ts";
 import { registerSearchLogs } from "./mcp/tools/search_logs.ts";
 import { registerSendKey } from "./mcp/tools/send_key.ts";
@@ -26,7 +27,7 @@ import { resolveRunRoot } from "./store/paths.ts";
 import { VERSION } from "./version.ts";
 
 /** The registered tool inventory size — kept in sync with `ANDROID_DEBUG_TOOL_NAMES`. */
-const TOOL_COUNT = 18;
+const TOOL_COUNT = 19;
 
 /**
  * Build the server, register every tool, recover orphaned runs, and connect
@@ -66,7 +67,7 @@ export async function bootstrap(): Promise<void> {
   rootLog.info("server ready", { version: VERSION, transport: "stdio", tools: TOOL_COUNT });
 }
 
-/** Register the full v1 tool inventory through the contract-enforcing helper. */
+/** Register the full tool inventory through the contract-enforcing helper. */
 export function registerAllTools(server: McpServer, manager: SessionManager): void {
   registerListDevices(server);
   registerStartSession(server, manager);
@@ -77,6 +78,7 @@ export function registerAllTools(server: McpServer, manager: SessionManager): vo
   registerGetAppState(server, manager);
   registerTap(server, manager);
   registerTapNode(server, manager);
+  registerMapUiNodeToSource(server, manager);
   registerInputText(server, manager);
   registerSendKey(server, manager);
   registerSwipe(server, manager);

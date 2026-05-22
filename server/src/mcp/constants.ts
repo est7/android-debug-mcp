@@ -7,7 +7,7 @@ export const TOOL_NAME_PREFIX = "android_debug_";
 /** Markers the register helper requires to be present (as substrings) in every tool description. § G-6. */
 export const DESCRIPTION_REQUIRED_MARKERS = ["Use when:", "Args:", "Returns:", "Errors:"] as const;
 
-/** Canonical inventory of v1 tool names. Keep in sync with § G-Final. */
+/** Canonical tool inventory — v1's 17 plus the two v2-A tools. Keep in sync with § G-Final. */
 export const ANDROID_DEBUG_TOOL_NAMES = [
   "android_debug_list_devices",
   "android_debug_start_session",
@@ -27,6 +27,7 @@ export const ANDROID_DEBUG_TOOL_NAMES = [
   "android_debug_list_runs",
   "android_debug_collect_bundle",
   "android_debug_tap_node",
+  "android_debug_map_ui_node_to_source",
 ] as const;
 
 export type AndroidDebugToolName = (typeof ANDROID_DEBUG_TOOL_NAMES)[number];

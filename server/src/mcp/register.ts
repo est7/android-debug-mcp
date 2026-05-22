@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { AdbError } from "../adb/errors.ts";
+import { SourceError } from "../source/errors.ts";
 import {
   ANDROID_DEBUG_TOOL_NAMES,
   type AndroidDebugToolName,
@@ -90,6 +91,9 @@ export interface WrappedToolResult {
  *     its `code` — so an adb-layer failure (binary missing, failed command,
  *     dropped device) reaches the agent as a branchable error, not a raw
  *     protocol error, from every adb-touching tool.
+ *   - `SourceError` → likewise keyed by its `code` (`rg_not_found` /
+ *     `search_timed_out` / `project_root_missing`) — a v2-A chain-M source
+ *     failure is a domain failure the agent branches on, not a protocol error.
  *   - any other throw → re-thrown as a genuine bug → JSON-RPC protocol error.
  */
 export function wrapToolHandler<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
@@ -118,6 +122,19 @@ export function wrapToolHandler<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
       // TOOL_ERROR_CODES, so render it into the same envelope rather than
       // letting it surface as a raw JSON-RPC protocol error.
       if (err instanceof AdbError) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ error: err.code, message: err.message }),
+            },
+          ],
+          isError: true,
+        };
+      }
+      // A v2-A source-mapping failure (`rg` missing, search timed out, no
+      // projectRoot) — same catalog, same envelope as AdbError.
+      if (err instanceof SourceError) {
         return {
           content: [
             {

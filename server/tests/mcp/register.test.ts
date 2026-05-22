@@ -11,6 +11,7 @@ import {
   wrapToolHandler,
 } from "../../src/mcp/register.ts";
 import { ToolDomainError } from "../../src/mcp/toolError.ts";
+import { ProjectRootMissingError, RgNotFoundError } from "../../src/source/errors.ts";
 
 function freshServer(): McpServer {
   return new McpServer({ name: "android-debug-mcp-test", version: "0.0.0-test" });
@@ -121,8 +122,8 @@ describe("registerDebugTool", () => {
     for (const name of ANDROID_DEBUG_TOOL_NAMES) {
       expect(name.startsWith("android_debug_")).toBe(true);
     }
-    // 18 tools — v1's 17 (§ G-Final) plus v2-A `tap_node`.
-    expect(ANDROID_DEBUG_TOOL_NAMES).toHaveLength(18);
+    // 19 tools — v1's 17 (§ G-Final) plus v2-A `tap_node` + `map_ui_node_to_source`.
+    expect(ANDROID_DEBUG_TOOL_NAMES).toHaveLength(19);
     expect(new Set(ANDROID_DEBUG_TOOL_NAMES).size).toBe(ANDROID_DEBUG_TOOL_NAMES.length);
   });
 });
@@ -171,6 +172,25 @@ describe("wrapToolHandler — result/error transport (open decision #13)", () =>
     const result = await wrapped({});
     expect(result.isError).toBe(true);
     expect(JSON.parse(result.content[0]?.text ?? "").error).toBe("adb_not_found");
+  });
+
+  it("SourceError → isError:true with error:rg_not_found (chain-M failure is a domain failure)", async () => {
+    const wrapped = wrapToolHandler(baseConfig(), async () => {
+      throw new RgNotFoundError(["$(which rg)"]);
+    });
+    const result = await wrapped({});
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    expect(JSON.parse(result.content[0]?.text ?? "").error).toBe("rg_not_found");
+  });
+
+  it("ProjectRootMissingError → isError:true with error:project_root_missing", async () => {
+    const wrapped = wrapToolHandler(baseConfig(), async () => {
+      throw new ProjectRootMissingError();
+    });
+    const result = await wrapped({});
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0]?.text ?? "").error).toBe("project_root_missing");
   });
 
   it("non-domain throw propagates as a genuine error", async () => {

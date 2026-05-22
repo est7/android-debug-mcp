@@ -89,6 +89,12 @@ function describeEvent(e: Record<string, unknown>): string {
       const anchor = anchorResourceId(e.anchorNode);
       return `tap_node (${asNumber(e.x)}, ${asNumber(e.y)})${anchor ? ` → ${anchor}` : ""}${label ? ` — ${label}` : ""}`;
     }
+    case "source_mapping": {
+      const anchor = anchorResourceId(e.anchorNode) ?? "(no anchor)";
+      const conf = asString(e.confidence) ?? "?";
+      const n = Array.isArray(e.candidates) ? e.candidates.length : 0;
+      return `source_mapping ${anchor} → ${conf} (${n} candidate${n === 1 ? "" : "s"})`;
+    }
     case "auto_stopped_by_timeout":
       return `auto-stopped — ${asString(e.reason) ?? "?"}`;
     case "device_disconnected":

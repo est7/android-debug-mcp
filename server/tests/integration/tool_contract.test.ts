@@ -45,10 +45,10 @@ function errorOf(result: unknown): string {
 }
 
 describe("v1 tool inventory", () => {
-  it("registers exactly the 18 tools of ANDROID_DEBUG_TOOL_NAMES", async () => {
+  it("registers exactly the 19 tools of ANDROID_DEBUG_TOOL_NAMES", async () => {
     const client = await harness();
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(18);
+    expect(tools).toHaveLength(19);
     expect(new Set(tools.map((t) => t.name))).toEqual(new Set(ANDROID_DEBUG_TOOL_NAMES));
   });
 
@@ -128,6 +128,11 @@ const BAD_RUNID_CASES: Array<[string, Record<string, unknown>, string]> = [
   ["android_debug_get_run_summary", {}, "run_missing"],
   ["android_debug_collect_bundle", {}, "run_missing"],
   ["android_debug_stop_session", {}, "run_missing"],
+  [
+    "android_debug_map_ui_node_to_source",
+    { anchorNode: null, foregroundActivity: null, ancestorChain: [] },
+    "run_missing",
+  ],
 ];
 
 describe("error-envelope contract — unknown runId", () => {
