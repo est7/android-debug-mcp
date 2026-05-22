@@ -18,14 +18,15 @@ import { registerStartSession } from "./mcp/tools/start_session.ts";
 import { registerStopSession } from "./mcp/tools/stop_session.ts";
 import { registerSwipe } from "./mcp/tools/swipe.ts";
 import { registerTap } from "./mcp/tools/tap.ts";
+import { registerTapNode } from "./mcp/tools/tap_node.ts";
 import { recoverOrphans } from "./recovery/scan.ts";
 import { HealthMonitor } from "./session/health.ts";
 import { SessionManager } from "./session/manager.ts";
 import { resolveRunRoot } from "./store/paths.ts";
 import { VERSION } from "./version.ts";
 
-/** The v1 tool inventory size — kept in sync with `ANDROID_DEBUG_TOOL_NAMES`. */
-const TOOL_COUNT = 17;
+/** The registered tool inventory size — kept in sync with `ANDROID_DEBUG_TOOL_NAMES`. */
+const TOOL_COUNT = 18;
 
 /**
  * Build the server, register every tool, recover orphaned runs, and connect
@@ -75,6 +76,7 @@ export function registerAllTools(server: McpServer, manager: SessionManager): vo
   registerClearAppData(server, manager);
   registerGetAppState(server, manager);
   registerTap(server, manager);
+  registerTapNode(server, manager);
   registerInputText(server, manager);
   registerSendKey(server, manager);
   registerSwipe(server, manager);

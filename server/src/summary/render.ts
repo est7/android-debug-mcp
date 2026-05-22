@@ -84,6 +84,11 @@ function describeEvent(e: Record<string, unknown>): string {
       return `swipe (${asNumber(e.x1)}, ${asNumber(e.y1)}) → (${asNumber(e.x2)}, ${asNumber(e.y2)})`;
     case "capture":
       return `capture ${Array.isArray(e.kinds) ? e.kinds.join("+") : "?"}`;
+    case "tap_node": {
+      const label = asString(e.label);
+      const anchor = anchorResourceId(e.anchorNode);
+      return `tap_node (${asNumber(e.x)}, ${asNumber(e.y)})${anchor ? ` → ${anchor}` : ""}${label ? ` — ${label}` : ""}`;
+    }
     case "auto_stopped_by_timeout":
       return `auto-stopped — ${asString(e.reason) ?? "?"}`;
     case "device_disconnected":
@@ -103,4 +108,11 @@ function asString(v: unknown): string | undefined {
 
 function asNumber(v: unknown): string {
   return typeof v === "number" ? String(v) : "?";
+}
+
+/** The `resourceId` of a `tap_node` event's `anchorNode`, when present. */
+function anchorResourceId(anchor: unknown): string | undefined {
+  if (typeof anchor !== "object" || anchor === null) return undefined;
+  const rid = (anchor as { resourceId?: unknown }).resourceId;
+  return typeof rid === "string" ? rid : undefined;
 }

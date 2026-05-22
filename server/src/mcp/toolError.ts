@@ -18,7 +18,8 @@
  *     isError: true }
  *
  * Any other throw is treated as a genuine bug and propagates as a protocol
- * error. The catalog below is the v1-final set (completed in Phase 10).
+ * error. The catalog was the v1-final set (Phase 10); v2-A tools append their
+ * own codes below.
  */
 
 export const TOOL_ERROR_CODES = {
@@ -38,6 +39,8 @@ export const TOOL_ERROR_CODES = {
   invalid_cursor: "invalid_cursor",
   mark_not_found: "mark_not_found",
   invalid_argument: "invalid_argument",
+  // v2-A:
+  ui_dump_failed: "ui_dump_failed",
 } as const;
 
 export type ToolErrorCode = (typeof TOOL_ERROR_CODES)[keyof typeof TOOL_ERROR_CODES];

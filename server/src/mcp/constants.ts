@@ -26,6 +26,7 @@ export const ANDROID_DEBUG_TOOL_NAMES = [
   "android_debug_get_run_summary",
   "android_debug_list_runs",
   "android_debug_collect_bundle",
+  "android_debug_tap_node",
 ] as const;
 
 export type AndroidDebugToolName = (typeof ANDROID_DEBUG_TOOL_NAMES)[number];
