@@ -155,6 +155,41 @@ describe("searchLogs filters", () => {
     expect(r.entries.map((e) => e.rawLineNo)).toEqual([6, 7, 8]);
   });
 
+  it("keeps only entries whose tag is in `tags` (single)", async () => {
+    writeLogcat(ENTRIES);
+    const r = await searchLogs(runDir, { limit: 100, tags: ["App"] }, BUDGET);
+    expect(r.entries.map((e) => e.rawLineNo)).toEqual([1, 5, 7]);
+  });
+
+  it("keeps entries matching any tag in `tags` (multiple)", async () => {
+    writeLogcat(ENTRIES);
+    const r = await searchLogs(runDir, { limit: 100, tags: ["Net", "Cache"] }, BUDGET);
+    expect(r.entries.map((e) => e.rawLineNo)).toEqual([2, 3]);
+  });
+
+  it("drops entries whose tag is in `excludeTags`", async () => {
+    writeLogcat(ENTRIES);
+    const r = await searchLogs(runDir, { limit: 100, excludeTags: ["App"] }, BUDGET);
+    expect(r.entries.map((e) => e.rawLineNo)).toEqual([2, 3, 4, 6, 8]);
+  });
+
+  it("applies `excludeTags` after `tags` — exclude wins on overlap", async () => {
+    writeLogcat(ENTRIES);
+    const r = await searchLogs(
+      runDir,
+      { limit: 100, tags: ["App", "Net"], excludeTags: ["App"] },
+      BUDGET,
+    );
+    expect(r.entries.map((e) => e.rawLineNo)).toEqual([2]);
+  });
+
+  it("matches tags case-sensitively (no case folding like `query`)", async () => {
+    writeLogcat(ENTRIES);
+    const r = await searchLogs(runDir, { limit: 100, tags: ["app"] }, BUDGET);
+    expect(r.entries).toEqual([]);
+    expect(r.matched).toBe(0);
+  });
+
   it("yields no entries (and no error) when logcat.jsonl is absent", async () => {
     const r = await searchLogs(runDir, { limit: 100 }, BUDGET);
     expect(r.entries).toEqual([]);
@@ -177,6 +212,26 @@ describe("searchLogs pagination", () => {
     } while (cursor !== undefined);
     // every entry, once, in order — no gaps, no dupes.
     expect(collected).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  it("re-applies a `tags` filter identically across paginated pages", async () => {
+    writeLogcat(ENTRIES);
+    const collected: number[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const r = await searchLogs(
+        runDir,
+        { limit: 2, tags: ["App"], ...(cursor ? { cursor } : {}) },
+        BUDGET,
+      );
+      collected.push(...r.entries.map((e) => e.rawLineNo));
+      cursor = r.nextCursor;
+      pages++;
+      expect(pages).toBeLessThan(10);
+    } while (cursor !== undefined);
+    // App lines only, once each, in order — filter stable across resume.
+    expect(collected).toEqual([1, 5, 7]);
   });
 
   it("rejects a malformed cursor with invalid_cursor", async () => {

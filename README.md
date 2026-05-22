@@ -13,7 +13,7 @@ disk you can inspect, bundle, or hand to a teammate. It deliberately does **not*
 do element-based UI automation (no AccessibilityService, no view-tree tapping) —
 see [Coexisting with mobile-mcp](#coexisting-with-mobile-mcp).
 
-Status: **v1 (0.1.0)** — all 17 tools registered; the five acceptance scenarios pass on-device.
+Status: **v1 (0.2.0)** — all 17 tools registered; the five acceptance scenarios pass on-device.
 
 ## Prerequisites
 

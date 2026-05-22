@@ -23,6 +23,16 @@ const inputSchema = z
     sinceTs: z.string().min(1, "sinceTs must be non-empty").max(64, "sinceTs too long").optional(),
     beforeMark: markName.optional(),
     afterMark: markName.optional(),
+    tags: z
+      .array(z.string().min(1, "tag must be non-empty").max(256, "tag too long"))
+      .min(1, "tags must list at least one tag")
+      .max(100, "tags list too long")
+      .optional(),
+    excludeTags: z
+      .array(z.string().min(1, "tag must be non-empty").max(256, "tag too long"))
+      .min(1, "excludeTags must list at least one tag")
+      .max(100, "excludeTags list too long")
+      .optional(),
     limit: z
       .number()
       .int()
@@ -62,7 +72,7 @@ const description = [
   "Search a debug run's parsed logcat (`logcat.jsonl`), streaming and paginated.",
   "",
   "Use when: the agent needs log lines matching a pattern, a severity, or a window relative to a `mark_event` marker — for an active or a finalized run.",
-  "Args: `runId`; optional `query` (case-insensitive substring of the message); `level` (severity threshold — `W` returns W/E/F); `buffer` (`main`/`system`/`crash`); `sinceTs` (device-clock `MM-DD HH:MM:SS.mmm` prefix, kept lines `>=` it); `beforeMark` / `afterMark` (a mark name — the logcat window before/after where that mark was placed); `limit` (1-500, default 100); `cursor` (opaque, from a prior `nextCursor` — pass the same filters across pages).",
+  "Args: `runId`; optional `query` (case-insensitive substring of the message); `level` (severity threshold — `W` returns W/E/F); `buffer` (`main`/`system`/`crash`); `sinceTs` (device-clock `MM-DD HH:MM:SS.mmm` prefix, kept lines `>=` it); `beforeMark` / `afterMark` (a mark name — the logcat window before/after where that mark was placed); `tags` (keep only entries whose `tag` exactly matches one of these — case-sensitive); `excludeTags` (drop entries whose `tag` exactly matches one of these — case-sensitive; applied after `tags`, so exclude wins on overlap); `limit` (1-500, default 100); `cursor` (opaque, from a prior `nextCursor` — pass the same filters across pages).",
   "Returns: `{entries[], scanned, matched, nextCursor?, truncated?, truncationMessage?}`. `nextCursor` present means more lines remain. `truncated` means one oversized log line had its message cut.",
   "Errors: `run_missing` for an unknown runId; `invalid_cursor` for a malformed cursor; `mark_not_found` when `beforeMark` / `afterMark` names a mark not in the run.",
 ].join("\n");
@@ -93,6 +103,8 @@ export function registerSearchLogs(server: McpServer, manager: SessionManager): 
         ...(input.sinceTs !== undefined ? { sinceTs: input.sinceTs } : {}),
         ...(input.beforeMark !== undefined ? { beforeMark: input.beforeMark } : {}),
         ...(input.afterMark !== undefined ? { afterMark: input.afterMark } : {}),
+        ...(input.tags !== undefined ? { tags: input.tags } : {}),
+        ...(input.excludeTags !== undefined ? { excludeTags: input.excludeTags } : {}),
         ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
       };
       const result = await searchLogs(runDir, opts, RESPONSE_CHAR_LIMIT - ENVELOPE_RESERVE);

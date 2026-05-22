@@ -156,6 +156,34 @@ describe("search_logs tool", () => {
     expect(entries[0]?.level).toBe("E");
   });
 
+  it("filters an active run's logcat.jsonl by tag", async () => {
+    const h = await harness();
+    const { runId, runDir } = await startRun(h);
+    writeFileSync(
+      join(runDir, "logcat.jsonl"),
+      `${JSON.stringify({ ...LOG_E, rawLineNo: 1, tag: "App" })}\n${JSON.stringify({ ...LOG_E, rawLineNo: 2, tag: "Net" })}\n`,
+    );
+    const r = await h.client.callTool({
+      name: "android_debug_search_logs",
+      arguments: { runId, tags: ["Net"] },
+    });
+    expect(r.isError).toBeFalsy();
+    const entries = structured(r).entries as Array<Record<string, unknown>>;
+    expect(entries.map((e) => e.rawLineNo)).toEqual([2]);
+    expect(entries[0]?.tag).toBe("Net");
+  });
+
+  it("rejects an empty `tags` array at the schema boundary", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    const r = await h.client.callTool({
+      name: "android_debug_search_logs",
+      arguments: { runId, tags: [] },
+    });
+    expect(r.isError).toBe(true);
+    expect(callText(r)).toContain("tags must list at least one tag");
+  });
+
   it("resolves a mark to an afterMark logcat window", async () => {
     const h = await harness();
     const { runId, runDir } = await startRun(h);

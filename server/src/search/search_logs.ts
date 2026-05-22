@@ -33,6 +33,8 @@ export interface SearchOptions {
   readonly sinceTs?: string;
   readonly beforeMark?: string;
   readonly afterMark?: string;
+  readonly tags?: readonly string[];
+  readonly excludeTags?: readonly string[];
   readonly limit: number;
   readonly cursor?: string;
 }
@@ -71,6 +73,8 @@ export async function searchLogs(
     opts.beforeMark !== undefined ? await resolveMarkOffset(runDir, opts.beforeMark) : null;
   const queryLc = opts.query?.toLowerCase();
   const minRank = opts.level ? (LEVEL_RANK[opts.level] ?? 0) : 0;
+  const tagSet = opts.tags ? new Set(opts.tags) : undefined;
+  const excludeTagSet = opts.excludeTags ? new Set(opts.excludeTags) : undefined;
 
   const entries: LogEntry[] = [];
   let scanned = start.scanned;
@@ -90,7 +94,15 @@ export async function searchLogs(
     const lineEnd = offset + Buffer.byteLength(text, "utf8") + 1;
     if (
       entry === null ||
-      !matches(entry, offset, { afterOffset, beforeOffset, minRank, opts, queryLc })
+      !matches(entry, offset, {
+        afterOffset,
+        beforeOffset,
+        minRank,
+        opts,
+        queryLc,
+        tagSet,
+        excludeTagSet,
+      })
     ) {
       resumeOffset = lineEnd;
       continue;
@@ -136,6 +148,8 @@ interface MatchContext {
   readonly minRank: number;
   readonly opts: SearchOptions;
   readonly queryLc: string | undefined;
+  readonly tagSet: ReadonlySet<string> | undefined;
+  readonly excludeTagSet: ReadonlySet<string> | undefined;
 }
 
 function matches(entry: LogEntry, offset: number, ctx: MatchContext): boolean {
@@ -143,6 +157,8 @@ function matches(entry: LogEntry, offset: number, ctx: MatchContext): boolean {
   if (ctx.beforeOffset !== null && offset >= ctx.beforeOffset) return false;
   if (ctx.opts.buffer !== undefined && entry.buffer !== ctx.opts.buffer) return false;
   if ((LEVEL_RANK[entry.level] ?? 0) < ctx.minRank) return false;
+  if (ctx.tagSet !== undefined && !ctx.tagSet.has(entry.tag)) return false;
+  if (ctx.excludeTagSet?.has(entry.tag)) return false;
   if (ctx.opts.sinceTs !== undefined && entry.tsRaw < ctx.opts.sinceTs) return false;
   if (ctx.queryLc !== undefined && !entry.message.toLowerCase().includes(ctx.queryLc)) return false;
   return true;
