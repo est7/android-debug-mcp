@@ -12,6 +12,7 @@
 | [`audit-2026-05-19-codex.md`](./audit-2026-05-19-codex.md) | codex audit 原文留档(5 critical / 13 major / 5 minor / 8 correctly-locked) | archived 2026-05-19 |
 | [`backlog.md`](./backlog.md) | v1.1 / v2 / v3 留档 + v1-spike(audit 中立未决项) | living |
 | [`v2/source-mapping.md`](./v2/source-mapping.md) | v2-A 设计 lock(tap-to-source;grill Q1–Q10 + codex 复审) | locked 2026-05-21 |
+| [`v2/v2-a-implementation-plan.md`](./v2/v2-a-implementation-plan.md) | v2-A 实施计划(6 phase + 并行 + 风险 + open decisions) | locked 2026-05-21 |
 | `architecture.md` | 系统架构图、session 生命周期、数据流 | v1.1(未建立) |
 | [`test-plan.md`](./test-plan.md) | 5 scenario 真机 manual checklist | Phase 11 落盘 |
 | [`audits/`](./audits/) | 各阶段 codex audit 报告原文(phase-1 … phase-N) | living |
