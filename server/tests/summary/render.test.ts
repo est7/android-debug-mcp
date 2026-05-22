@@ -11,6 +11,7 @@ function makeRunData(overrides: Partial<RunData> = {}): RunData {
       packageName: "com.example.app",
       runRoot: "/tmp/runs",
       runRootSource: "env",
+      projectRoot: null,
       startedAt: "2026-05-20T10:00:00.000Z",
       closedAt: "2026-05-20T10:05:00.000Z",
       status: "stopped",

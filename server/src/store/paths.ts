@@ -78,6 +78,45 @@ export function resolveRunRoot(input: ResolveRunRootInput = {}): ResolvedRunRoot
   return resolved;
 }
 
+export interface ResolveProjectRootInput {
+  /**
+   * Explicit `projectRoot` from `start_session({ projectRoot })`. When present
+   * and non-empty it is the directory probed for the git top-level — the app
+   * under debug is rarely the MCP server's own cwd, so cwd alone is wrong.
+   */
+  readonly projectRoot?: string;
+  /** Directory probed when no explicit `projectRoot` is given. Defaults to `process.cwd()`. */
+  readonly cwd?: string;
+}
+
+// Memoized separately from `cache` (runRoot): different value shape, same
+// resetPathsCache() lifecycle. Stores `null` for non-git probe dirs so a
+// repeated miss does not re-spawn git.
+const projectRootCache = new Map<string, string | null>();
+
+/**
+ * Resolve the source tree this run maps UI nodes back into (v2-A chain M, Q5).
+ *
+ * The probe directory is the explicit `projectRoot` when given, else `cwd`. It
+ * is always normalized through `git rev-parse --show-toplevel`: a sub-dir
+ * resolves to its repository root, a non-git directory resolves to `null`. The
+ * source root is never inferred from `runRoot` and cwd is never used verbatim —
+ * a `null` here surfaces downstream as `project_root_missing`, not a guess.
+ *
+ * Memoized per probe directory; {@link resetPathsCache} clears it.
+ */
+export function resolveProjectRoot(input: ResolveProjectRootInput = {}): string | null {
+  const probeDir =
+    input.projectRoot && input.projectRoot.trim() !== ""
+      ? input.projectRoot
+      : (input.cwd ?? process.cwd());
+  const cached = projectRootCache.get(probeDir);
+  if (cached !== undefined) return cached;
+  const resolved = gitTopLevel(probeDir);
+  projectRootCache.set(probeDir, resolved);
+  return resolved;
+}
+
 /**
  * Lockfiles live globally (per user nod 2026-05-19, overriding plan #2 tentative
  * "repo-local"): a single (deviceSerial, userId, packageName) tuple must
@@ -91,6 +130,7 @@ export function getLocksRoot(): string {
 
 export function resetPathsCache(): void {
   cache.clear();
+  projectRootCache.clear();
 }
 
 function ensureAbsolute(path: string): string {

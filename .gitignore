@@ -28,3 +28,9 @@ bun.lockb
 # Reference repos (clone-only, not part of this project)
 android-mcp-server/
 Android-MCP/
+
+# Misplaced marketplace-plugin copy (not part of this repo)
+android-debug-tools/
+
+# In-flight implementation notes (drift buffer, not version-controlled)
+implementation-notes.md

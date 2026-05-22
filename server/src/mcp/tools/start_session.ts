@@ -13,7 +13,7 @@ import { getGitInfo } from "../../host/git.ts";
 import { DEFAULT_LOGCAT_BUFFER_SIZE } from "../../logcat/spawn.ts";
 import type { SessionManager } from "../../session/manager.ts";
 import { IdentityError, assertSafePackageName } from "../../store/identity.ts";
-import { resolveRunRoot } from "../../store/paths.ts";
+import { resolveProjectRoot, resolveRunRoot } from "../../store/paths.ts";
 import { clearClosedRuns } from "../../store/run.ts";
 import { registerDebugTool } from "../register.ts";
 import { ToolDomainError } from "../toolError.ts";
@@ -83,9 +83,13 @@ export function registerStartSession(server: McpServer, manager: SessionManager)
 
       const deviceSerial = await resolveDevice(input.deviceSerial);
       const userId = await resolveUserId(deviceSerial, input.userId);
-      const { runRoot, source } = resolveRunRoot(
-        input.projectRoot !== undefined ? { projectRoot: input.projectRoot } : {},
-      );
+      const rootArg = input.projectRoot !== undefined ? { projectRoot: input.projectRoot } : {};
+      const { runRoot, source } = resolveRunRoot(rootArg);
+      // Source-tree root for v2-A tap-to-source: the explicit projectRoot when
+      // given, else the git top-level of cwd; null outside a git checkout. Q5:
+      // never inferred from runRoot — a null surfaces later as
+      // `project_root_missing`, not a silent wrong-root mapping.
+      const projectRoot = resolveProjectRoot(rootArg);
 
       let clearedRunCount = 0;
       if (input.clearLocalRunLogs === true) {
@@ -98,6 +102,7 @@ export function registerStartSession(server: McpServer, manager: SessionManager)
         packageName: input.packageName,
         runRoot,
         runRootSource: source,
+        projectRoot,
       });
 
       // Everything past this point runs AFTER the session is registered and

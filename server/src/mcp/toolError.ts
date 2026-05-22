@@ -39,8 +39,12 @@ export const TOOL_ERROR_CODES = {
   invalid_cursor: "invalid_cursor",
   mark_not_found: "mark_not_found",
   invalid_argument: "invalid_argument",
-  // v2-A:
+  // v2-A chain T (tap_node):
   ui_dump_failed: "ui_dump_failed",
+  // v2-A chain M (source mapping): surfaced by android_debug_map_ui_node_to_source.
+  rg_not_found: "rg_not_found",
+  search_timed_out: "search_timed_out",
+  project_root_missing: "project_root_missing",
 } as const;
 
 export type ToolErrorCode = (typeof TOOL_ERROR_CODES)[keyof typeof TOOL_ERROR_CODES];

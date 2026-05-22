@@ -9,7 +9,8 @@ import { z } from "zod";
  *
  * Layout intent (§ design-lock + § C-3 + § D-M1 + § D-M8):
  *   - Identity:      runId, deviceSerial, userId, packageName
- *   - Provenance:    runRoot, runRootSource (where it landed and why)
+ *   - Provenance:    runRoot, runRootSource (where it landed and why),
+ *                    projectRoot (the source tree v2-A maps UI nodes into)
  *   - Timing:        startedAt, closedAt
  *   - Outcome:       status, exitCode, signalCode, killed, crashFound
  *   - Volumes:       bytesRead, linesParsed
@@ -27,6 +28,10 @@ export const MetadataSchema = z
     packageName: z.string().min(1),
     runRoot: z.string().min(1),
     runRootSource: RunRootSourceSchema,
+    // v2-A additive (Phase 2.0): the resolved source-tree root, or null when
+    // the host is not in a git checkout. Absent in pre-v2-A runs on disk —
+    // `.default(null)` reads those as `null` without a schema migration.
+    projectRoot: z.string().min(1).nullable().default(null),
     startedAt: z.string().datetime(),
     closedAt: z.string().datetime().nullable().default(null),
     status: RunStatusSchema,

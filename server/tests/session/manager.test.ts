@@ -34,6 +34,7 @@ function startInput(overrides: Partial<StartSessionInput> = {}): StartSessionInp
     packageName: "com.example.app",
     runRoot: scratch,
     runRootSource: "fallback",
+    projectRoot: null,
     ...overrides,
   };
 }

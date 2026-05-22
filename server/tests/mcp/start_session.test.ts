@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -7,7 +8,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerStartSession } from "../../src/mcp/tools/start_session.ts";
 import { SessionManager } from "../../src/session/manager.ts";
+import type { Session } from "../../src/session/session.ts";
 import { AppendStream } from "../../src/store/jsonl.ts";
+import { readMetadata } from "../../src/store/metadata.ts";
 import { resetPathsCache } from "../../src/store/paths.ts";
 
 // start_session shells `adb` via the Bun runtime; vitest runs under Node where
@@ -111,6 +114,19 @@ function callText(result: unknown): string {
   return (result as { content?: { text?: string }[] }).content?.[0]?.text ?? "";
 }
 
+/** A throwaway git repo whose realpath `git rev-parse --show-toplevel` reports. */
+function makeGitRepo(): { dir: string; topLevel: string } {
+  const dir = mkdtempSync(join(tmpdir(), "android-debug-mcp-fakerepo-"));
+  execFileSync("git", ["init", "-q", dir]);
+  return { dir, topLevel: realpathSync(dir) };
+}
+
+function onlyActive(manager: SessionManager): Session {
+  const active = manager.listActive();
+  expect(active).toHaveLength(1);
+  return active[0] as Session;
+}
+
 describe("start_session tool — failure paths", () => {
   it("rejects a path-traversal packageName as invalid_identity (P3-P2-4)", async () => {
     const h = await harness();
@@ -171,5 +187,66 @@ describe("start_session tool — failure paths", () => {
     });
     expect(second.isError).toBeFalsy();
     expect(h.manager.listActive()).toHaveLength(1);
+  });
+});
+
+describe("start_session tool — projectRoot persistence (Phase 2.0)", () => {
+  it("persists metadata.projectRoot from an explicit projectRoot (active run)", async () => {
+    const repo = makeGitRepo();
+    try {
+      const h = await harness();
+      const result = await h.client.callTool({
+        name: "android_debug_start_session",
+        arguments: { packageName: "com.example.app", projectRoot: repo.dir },
+      });
+      expect(result.isError).toBeFalsy();
+      const meta = await readMetadata(onlyActive(h.manager).runDir);
+      // The explicit dir is normalized through `git rev-parse --show-toplevel`.
+      expect(meta.projectRoot).toBe(repo.topLevel);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps projectRoot after the run is finalized (read back from disk)", async () => {
+    const repo = makeGitRepo();
+    try {
+      const h = await harness();
+      const result = await h.client.callTool({
+        name: "android_debug_start_session",
+        arguments: { packageName: "com.example.app", projectRoot: repo.dir },
+      });
+      expect(result.isError).toBeFalsy();
+      const session = onlyActive(h.manager);
+      const runDir = session.runDir;
+      await session.finalize("stopped");
+      const meta = await readMetadata(runDir);
+      expect(meta.closedAt).not.toBeNull();
+      expect(meta.projectRoot).toBe(repo.topLevel); // survived the finalize patch
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists projectRoot:null when the resolved source root is not a git checkout", async () => {
+    // An explicit projectRoot that is not a git repo: `resolveProjectRoot`
+    // normalizes through `git rev-parse --show-toplevel`, which fails, so it
+    // yields null (no verbatim passthrough) — and null is what lands in
+    // metadata. cwd cannot be changed inside a vitest worker, so a non-git
+    // explicit root is how the null path is exercised at the tool boundary;
+    // the "no explicit root, non-git cwd" pair is covered in paths.test.ts.
+    const nonGit = mkdtempSync(join(tmpdir(), "android-debug-mcp-nongit-"));
+    try {
+      const h = await harness();
+      const result = await h.client.callTool({
+        name: "android_debug_start_session",
+        arguments: { packageName: "com.example.app", projectRoot: nonGit },
+      });
+      expect(result.isError).toBeFalsy();
+      const meta = await readMetadata(onlyActive(h.manager).runDir);
+      expect(meta.projectRoot).toBeNull();
+    } finally {
+      rmSync(nonGit, { recursive: true, force: true });
+    }
   });
 });

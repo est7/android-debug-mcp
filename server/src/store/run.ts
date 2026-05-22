@@ -19,6 +19,8 @@ import type { RunRootSource } from "./paths.ts";
 export interface RunFolderInput {
   readonly runRoot: string;
   readonly runRootSource: RunRootSource;
+  /** Resolved source-tree root (v2-A chain M), or null outside a git checkout. */
+  readonly projectRoot: string | null;
   readonly packageName: string;
   readonly userId: number;
   readonly runId: string;
@@ -156,6 +158,7 @@ function initialMetadata(input: RunFolderInput): MetadataInput {
     packageName: input.packageName,
     runRoot: input.runRoot,
     runRootSource: input.runRootSource,
+    projectRoot: input.projectRoot,
     startedAt: input.startedAt.toISOString(),
     closedAt: null,
     status,

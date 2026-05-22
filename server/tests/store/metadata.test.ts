@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -67,6 +67,25 @@ describe("metadata schema + IO", () => {
     expect(patched.linesParsed).toBe(17);
     const reread = await readMetadata(scratch);
     expect(reread).toEqual(patched);
+  });
+
+  it("reads a pre-v2-A metadata.json (no projectRoot key) as projectRoot:null", async () => {
+    // A run written before Phase 2.0 simply lacks the key; the additive
+    // `.default(null)` must read it back without a schema migration.
+    writeFileSync(join(scratch, METADATA_FILENAME), JSON.stringify(minimal()));
+    const read = await readMetadata(scratch);
+    expect(read.projectRoot).toBeNull();
+  });
+
+  it("round-trips an explicit projectRoot through write + read", async () => {
+    const written = await writeMetadata(scratch, {
+      ...minimal(),
+      projectRoot: "/Users/est9/AndroidStudioProjects/submodulepoppo",
+    });
+    expect(written.projectRoot).toBe("/Users/est9/AndroidStudioProjects/submodulepoppo");
+    expect((await readMetadata(scratch)).projectRoot).toBe(
+      "/Users/est9/AndroidStudioProjects/submodulepoppo",
+    );
   });
 
   it("writeMetadata produces pretty-printed JSON ending in newline", async () => {

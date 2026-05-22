@@ -10,7 +10,8 @@
       "android-mcp-server",
       "Android-MCP",
       ".android-debug-runs",
-      ".agent-mail"
+      ".agent-mail",
+      ".claude"
     ]
   },
   "formatter": {

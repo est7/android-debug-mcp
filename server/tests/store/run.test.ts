@@ -18,6 +18,7 @@ function fixture(overrides: Partial<Parameters<typeof createRunDir>[0]> = {}) {
   return {
     runRoot: scratch,
     runRootSource: "fallback" as const,
+    projectRoot: null as string | null,
     packageName: "com.example.app",
     userId: 0,
     runId: "2026-05-19T10-15-49.821Z_aB3k",
@@ -50,6 +51,16 @@ describe("createRunDir + runPath", () => {
     expect(folder.metadata.closedAt).toBeNull();
     expect(folder.metadata.crashFound).toBe(false);
     await folder.closeStreams();
+  });
+
+  it("seeds metadata.projectRoot from the resolved source root", async () => {
+    const withRoot = await createRunDir(fixture({ projectRoot: "/repo/poppo" }));
+    expect(withRoot.metadata.projectRoot).toBe("/repo/poppo");
+    await withRoot.closeStreams();
+    // The fixture default is null (host not in a git checkout).
+    const withoutRoot = await createRunDir(fixture({ runId: "2026-05-19T10-17-00.000Z_BBBB" }));
+    expect(withoutRoot.metadata.projectRoot).toBeNull();
+    await withoutRoot.closeStreams();
   });
 
   it("isolates work-profile userId paths from primary userId", async () => {

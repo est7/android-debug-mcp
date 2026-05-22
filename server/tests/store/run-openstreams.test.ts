@@ -40,6 +40,7 @@ describe("createRunDir partial-stream cleanup", () => {
       createRunDir({
         runRoot: scratch,
         runRootSource: "fallback",
+        projectRoot: null,
         packageName: "com.example.app",
         userId: 0,
         runId: "2026-05-19T10-15-49.821Z_aAaA",
