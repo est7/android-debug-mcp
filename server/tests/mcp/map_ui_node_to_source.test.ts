@@ -168,6 +168,35 @@ describe("map_ui_node_to_source — happy path", () => {
     expect(structured(result).confidence).toBe("none");
     expect(structured(result).candidates).toEqual([]);
   });
+
+  it("returns soft none for a null anchor even when the run has no projectRoot", async () => {
+    // A no-anchor tap needs no rg search, so it must not depend on a source
+    // root — projectRoot:null yields a soft none, not project_root_missing.
+    const { runId } = await makeRun(null);
+    const client = await harness();
+    const result = await callMap(client, {
+      runId,
+      anchorNode: null,
+      foregroundActivity: null,
+      ancestorChain: [],
+    });
+    expect((result as { isError?: unknown }).isError).toBeFalsy();
+    expect(structured(result).confidence).toBe("none");
+    expect(structured(result).candidates).toEqual([]);
+  });
+
+  it("returns soft none for a framework anchor even when the run has no projectRoot", async () => {
+    const { runId } = await makeRun(null);
+    const client = await harness();
+    const result = await callMap(client, {
+      runId,
+      anchorNode: node("android:id/text1"),
+      foregroundActivity: null,
+      ancestorChain: [],
+    });
+    expect((result as { isError?: unknown }).isError).toBeFalsy();
+    expect(structured(result).confidence).toBe("none");
+  });
 });
 
 describe("map_ui_node_to_source — hard errors (design lock Q9)", () => {

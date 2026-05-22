@@ -94,7 +94,18 @@ export function evaluateConfidence(input: ConfidenceInput): ConfidenceResult {
     foregroundSimpleName === null
       ? []
       : [...ownerFiles].filter((file) => classFileSimpleName(file) === foregroundSimpleName);
-  const handlerInOwner = [...codeRefFiles].some((file) => ownerFiles.has(file));
+  // The disambiguated screen owner: the foreground-matched one when the
+  // foreground Activity singles out exactly one, else the sole owner when
+  // there is only one. `high` requires a code reference inside *that* owner —
+  // a handler in a non-foreground owner must not earn high (design lock §
+  // confidence: high = owner disambiguated AND handler in that screen owner).
+  const resolvedOwnerFiles =
+    foregroundMatchedOwners.length === 1
+      ? new Set(foregroundMatchedOwners)
+      : ownerFiles.size === 1
+        ? new Set(ownerFiles)
+        : new Set<string>();
+  const handlerInResolvedOwner = [...codeRefFiles].some((file) => resolvedOwnerFiles.has(file));
 
   const flags: Record<ConfidenceSignal, boolean> = {
     resource_id_present: anchorResourceId !== null,
@@ -113,7 +124,7 @@ export function evaluateConfidence(input: ConfidenceInput): ConfidenceResult {
   const verdict = classify(flags, {
     candidateCount: input.candidates.length,
     ownerResolved: ownerFiles.size > 0,
-    handlerInOwner,
+    handlerInResolvedOwner,
   });
 
   return {
@@ -125,8 +136,10 @@ export function evaluateConfidence(input: ConfidenceInput): ConfidenceResult {
 
 interface ClassifyContext {
   readonly candidateCount: number;
+  /** Any screen owner was found at all (drives `medium`). */
   readonly ownerResolved: boolean;
-  readonly handlerInOwner: boolean;
+  /** A code reference sits inside the *disambiguated* screen owner (drives `high`). */
+  readonly handlerInResolvedOwner: boolean;
 }
 
 function classify(
@@ -170,7 +183,7 @@ function classify(
         "The id is declared in multiple layouts and the foreground Activity does not single one out.",
     };
   }
-  if (ctx.ownerResolved && ctx.handlerInOwner) {
+  if (ctx.handlerInResolvedOwner) {
     return {
       confidence: "high",
       reason: flags.layout_inflated_by_foreground_activity

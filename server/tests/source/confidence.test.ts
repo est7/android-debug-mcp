@@ -110,6 +110,26 @@ describe("evaluateConfidence — medium tier", () => {
     expect(r.confidence).toBe("medium");
     expect(r.signals).not.toContain("code_refs_found");
   });
+
+  it("is medium (not high) when the handler lives in a non-foreground owner", () => {
+    // The id is declared in two layouts; the foreground Activity is
+    // LoginActivity, but the only code reference is inside OtherActivity —
+    // the owner is disambiguated yet the handler is in the wrong screen.
+    const r = evaluateConfidence(
+      input({
+        foregroundActivity: "com.baitu.poppo/.LoginActivity",
+        candidates: [
+          cand("id_declaration", LOGIN_LAYOUT),
+          cand("id_declaration", OTHER_LAYOUT),
+          cand("screen_owner", LOGIN_OWNER),
+          cand("screen_owner", OTHER_OWNER),
+          cand("code_ref", OTHER_OWNER, 42),
+        ],
+      }),
+    );
+    expect(r.confidence).toBe("medium");
+    expect(r.signals).toContain("code_refs_found");
+  });
 });
 
 describe("evaluateConfidence — low tier", () => {

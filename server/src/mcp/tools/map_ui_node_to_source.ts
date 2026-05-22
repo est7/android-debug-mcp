@@ -6,7 +6,7 @@ import type { SessionManager } from "../../session/manager.ts";
 import { SOURCE_CANDIDATE_KINDS } from "../../source/candidate.ts";
 import { CONFIDENCE_SIGNALS, evaluateConfidence } from "../../source/confidence.ts";
 import { requireProjectRoot } from "../../source/project_root.ts";
-import { parseResourceId, resolveCandidates } from "../../source/recipe.ts";
+import { type RecipeResult, parseResourceId, resolveCandidates } from "../../source/recipe.ts";
 import { AppendStream } from "../../store/jsonl.ts";
 import { resolveRunDir } from "../../store/locate.ts";
 import { readMetadata } from "../../store/metadata.ts";
@@ -103,19 +103,20 @@ export function registerMapUiNodeToSource(server: McpServer, manager: SessionMan
     async (input) => {
       const runDir = await resolveRunDir(manager, input.runId);
       const metadata = await readMetadata(runDir);
-      // Q5: the source root is the persisted projectRoot, nothing else.
-      const projectRoot = requireProjectRoot(metadata);
 
       const anchorResourceId = input.anchorNode?.resourceId ?? null;
       const parsed = anchorResourceId !== null ? parseResourceId(anchorResourceId) : null;
       // Only an app-package resource-id is a real source anchor (design lock
-      // Q4) — skip the `rg` searches for a null / framework / foreign anchor;
-      // the confidence model returns `none` for those anyway.
+      // Q4). A null / framework / foreign anchor needs no `rg` search — and so
+      // needs no projectRoot: it is a soft `none`, never a hard error. Q5's
+      // `project_root_missing` applies only when a search would actually run.
       const isAppAnchor = parsed !== null && parsed.pkg === metadata.packageName;
-      const recipe =
-        isAppAnchor && anchorResourceId !== null
-          ? await resolveCandidates(anchorResourceId, projectRoot)
-          : { candidates: [], commands: [] };
+      let recipe: RecipeResult = { candidates: [], commands: [] };
+      if (isAppAnchor && anchorResourceId !== null) {
+        // Q5: the source root is the persisted projectRoot, nothing else.
+        const projectRoot = requireProjectRoot(metadata);
+        recipe = await resolveCandidates(anchorResourceId, projectRoot);
+      }
 
       const verdict = evaluateConfidence({
         candidates: recipe.candidates,
