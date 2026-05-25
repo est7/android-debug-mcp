@@ -170,6 +170,46 @@ describe("parseUiHierarchy — edge cases", () => {
     expect(parseUiHierarchy(xml)[0]?.resourceId).toBe("a&b");
   });
 
+  it("decodes decimal numeric character references in text (Phase 3 finding)", () => {
+    // uiautomator emits emoji / flag glyphs as decimal &#N; — without
+    // decoding, an agent reading `list_elements` sees "&#127477;&#127469;"
+    // instead of "🇵🇭" and misclassifies the element.
+    const xml =
+      '<hierarchy><node class="X" package="p" bounds="[0,0][10,10]" text="&#127477;&#127469;" /></hierarchy>';
+    expect(parseUiHierarchy(xml)[0]?.text).toBe("🇵🇭");
+  });
+
+  it("decodes hex numeric character references in content-desc", () => {
+    // 0x1F1F5 = regional-indicator P, 0x1F1ED = H → "🇵🇭" (PH flag).
+    const xml =
+      '<hierarchy><node class="X" package="p" bounds="[0,0][10,10]" content-desc="&#x1F1F5;&#x1F1ED;" /></hierarchy>';
+    expect(parseUiHierarchy(xml)[0]?.contentDesc).toBe("🇵🇭");
+  });
+
+  it("keeps `&amp;#65;` as the literal text `&#65;` (no double-decode through `&amp;`)", () => {
+    // `&amp;` MUST decode last so `&amp;#65;` becomes the literal `&#65;`,
+    // not `A`.  Without this ordering the numeric-ref pass would see a `&#`
+    // sequence that never existed in the source.
+    const xml =
+      '<hierarchy><node class="X" package="p" bounds="[0,0][10,10]" text="&amp;#65;" /></hierarchy>';
+    expect(parseUiHierarchy(xml)[0]?.text).toBe("&#65;");
+  });
+
+  it("preserves an out-of-range numeric reference as the literal entity", () => {
+    // Surrogate ranges + values beyond U+10FFFF are not legal code points;
+    // the decoder returns the original `&#N;` rather than a synthesized
+    // replacement character so the caller can see uiautomator emitted junk.
+    const xml =
+      '<hierarchy><node class="X" package="p" bounds="[0,0][10,10]" text="&#9999999999;" /></hierarchy>';
+    expect(parseUiHierarchy(xml)[0]?.text).toBe("&#9999999999;");
+  });
+
+  it("preserves a non-numeric `&#abc;` reference as the literal entity", () => {
+    const xml =
+      '<hierarchy><node class="X" package="p" bounds="[0,0][10,10]" text="&#abc;" /></hierarchy>';
+    expect(parseUiHierarchy(xml)[0]?.text).toBe("&#abc;");
+  });
+
   it("a `>` inside an attribute value does not end the tag early", () => {
     const xml =
       '<hierarchy><node class="A" package="p" content-desc="2 > 1" resource-id="ok" /></hierarchy>';

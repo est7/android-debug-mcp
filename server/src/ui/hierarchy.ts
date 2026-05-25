@@ -210,8 +210,16 @@ function parseIndex(raw: string | undefined): number | null {
   return Number(raw);
 }
 
-/** Decode the five XML predefined entities. `&amp;` is decoded last so an
- * escaped entity like `&amp;lt;` survives as the literal text `&lt;`. */
+/** Decode XML predefined entities AND numeric character references.
+ *
+ * uiautomator emits all non-ASCII characters (CJK, emoji, flag glyphs, bidi
+ * controls) as numeric character references — `&#127477;&#127469;` is "🇵🇭",
+ * not the literal text. v2-A's hidden-by-sealant `tap_node` never surfaced
+ * this; v2-F `list_elements` returns `text` / `contentDesc` / `hint` directly
+ * to the agent and an un-decoded `&#N;` would confuse downstream matching.
+ *
+ * `&amp;` is decoded LAST so an escaped reference like `&amp;#65;` survives as
+ * the literal text `&#65;` rather than being double-decoded to `A`. */
 function decodeEntities(s: string): string {
   if (!s.includes("&")) return s;
   return s
@@ -219,5 +227,14 @@ function decodeEntities(s: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
+    .replace(/&#x([0-9a-fA-F]+);/g, (m, hex) => decodeCodePoint(Number.parseInt(hex, 16)) ?? m)
+    .replace(/&#(\d+);/g, (m, dec) => decodeCodePoint(Number.parseInt(dec, 10)) ?? m)
     .replace(/&amp;/g, "&");
+}
+
+/** Convert a Unicode code point to its `String` form, returning `null` for an
+ * out-of-range value so the caller preserves the literal entity reference. */
+function decodeCodePoint(code: number): string | null {
+  if (!Number.isFinite(code) || code < 0 || code > 0x10ffff) return null;
+  return String.fromCodePoint(code);
 }
