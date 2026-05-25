@@ -85,14 +85,40 @@ list_elements output:    windowCount=1  elementCount=138  captureId=2bdbae0d3172
                          contentDesc-bearing example: tab LinearLayouts: "好友" / "关注" / "粉丝" / "访客" /
                                                       "特别关注"  (contentDesc set on the row container;
                                                       child TextView carries `text` instead)
-                         hint-bearing example:        not observed on this screen — covered via
-                                                      server/tests/ui/list_elements.test.ts:45 inline XML
-                                                      ("propagates `hint` from a parsed EditText...")
-                         checkable example:           not observed on this screen — covered via
-                                                      server/tests/ui/list_elements.test.ts:53 inline XML
-                                                      ("emits `checked: true` only when checkable AND checked")
-                                                      + server/tests/ui/hierarchy.test.ts:75 fixture-based
-                                                      assertion on login.xml `remember` CheckBox
+                         hint-bearing example:        STRUCTURALLY UNREACHABLE on Poppo —
+                                                      Poppo's code-driven i18n
+                                                      (TranslateResource.getStringResources) routes the
+                                                      translated placeholder into `setText()` rather than
+                                                      `setHint()`. Verified live on
+                                                      `com.baitu.poppo:id/content` EditText in
+                                                      DynamicAddActivity (rerun on 2026-05-25): layout XML
+                                                      declares `android:hint="@string/hint_think_sth"`, but
+                                                      uiautomator dump shows `text:"说点什么记录这一刻…"` /
+                                                      `hint:null`. Covered by vitest inline XML
+                                                      (server/tests/ui/list_elements.test.ts:45 +
+                                                      server/tests/ui/hierarchy.test.ts entity decode cases).
+                                                      See element-interaction.md § Amendments
+                                                      "Scenario A `hint` 真机 Poppo 结构性不可达" 2026-05-25.
+                         checkable example:           ✓ LIVE OBSERVED on rerun
+                                                      runId 2026-05-25T08-28-25.204Z_huXV,
+                                                      captureId d8b1829add06 (DynamicAddActivity →
+                                                      visibility permission dialog):
+                                                        com.baitu.poppo:id/cb_publicly_visible
+                                                          (android.widget.RadioButton) checkable:true,
+                                                          checked:true ← BOTH checkable AND checked fields
+                                                          covered live (bonus over original criterion).
+                                                        com.baitu.poppo:id/cb_only_me  (RadioButton)
+                                                          checkable:true; `checked` key absent (false →
+                                                          not emitted, per "only emit when true" lock).
+                                                      The visibility dialog is opened by tapping
+                                                      `com.baitu.poppo:id/lockLayout` "所有人可以查看此动态"
+                                                      on the DynamicAddActivity. `dialog_visibility_permission.xml`
+                                                      uses real `<RadioButton>` (Android `Checkable`
+                                                      contract). Most other Poppo "switches" (e.g.
+                                                      `com.baitu.poppo:id/ivSettingSwitch` on the 特权设置
+                                                      page) are styled `android.widget.ImageView` and do
+                                                      NOT implement Checkable — see amendment below for the
+                                                      design-choice context.
                          clickable example:           com.baitu.poppo:id/backButton (true ImageView)
                                                       com.baitu.poppo:id/avatar       (per-row, 9 hits)
                                                       com.baitu.poppo:id/ivAddFav     (per-row, 9 hits)
@@ -103,10 +129,23 @@ list_elements output:    windowCount=1  elementCount=138  captureId=2bdbae0d3172
                                                       "关注" sub-tab + child TextView (3 selected hits total)
 artifact:                artifacts/ui-2bdbae0d3172.xml (64K)
 Notes:                   Scenario A ran on the 关注列表 (ContactsActivity tab "关注"),
-                         18 followees, 9 rows visible at start. `hint` + `checkable`
-                         not reachable on this screen — vitest covers both per ledger.
-                         All 138 elements have integer `center.x` / `center.y` (proves
-                         scenario B's Math.floor invariant on live data).
+                         18 followees, 9 rows visible at start.  All 138 elements
+                         have integer `center.x` / `center.y` (proves scenario B's
+                         Math.floor invariant on live data).
+
+                         Rerun on 2026-05-25 (runId 2026-05-25T08-28-25.204Z_huXV)
+                         to close the `checkable` + `hint` gap raised by the
+                         cadence-A 2nd-round audit:
+
+                         - **checkable**: real-device observed on the visibility
+                           permission dialog's RadioButtons. Gap CLOSED on device.
+                         - **hint**: Poppo's code-driven i18n routes hint string
+                           to `setText()`, so `node.hint` is structurally null on
+                           any Poppo screen. Live-confirmed on DynamicAddActivity's
+                           `content` EditText (XML has `android:hint=…`; dump has
+                           `text:"说点什么记录这一刻…"` / `hint:null`). The gap is
+                           NOT a v2-F algorithm defect; covered by vitest +
+                           element-interaction.md § Amendments (Scenario A `hint`).
 ```
 
 1. `start_session` per the preamble.
@@ -119,10 +158,11 @@ Notes:                   Scenario A ran on the 关注列表 (ContactsActivity ta
 
 - [x] `list_elements` returns `elementCount >= 1` and `windowCount === 1`
       (elementCount=138, windowCount=1).
-- [x] `text` / `contentDesc` / `clickable` each have ≥1 element. `checkable`
-      and `hint` not reachable on this screen — both fall back to vitest
-      coverage per the ledger Notes line (no device-side regression observed,
-      Poppo's 关注列表 simply has no toggles / search bars).
+- [x] `text` / `contentDesc` / `clickable` / `selected` observed on the
+      关注列表 original run; `checkable` AND `checked` observed live on the
+      DynamicAddActivity → visibility-permission dialog RadioButton (rerun
+      2026-05-25T08-28-25.204Z_huXV). `hint` is structurally unreachable on
+      Poppo (code-driven i18n → text); covered by vitest + amendment.
 - [x] `artifacts/ui-2bdbae0d3172.xml` exists, 64K.
 - [x] `events.jsonl` contains both `{type:"capture", captureId, kinds:["ui_dump"]}`
       and `{type:"list_elements", captureId, elementCount, windowCount, label}`.

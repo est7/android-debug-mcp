@@ -251,12 +251,14 @@ Route A 的概念,Route B 下 element 选择由 agent 做,server 不二判。
 
 ## 验收 scenario(定稿 2026-05-25)
 
+
+
 实施期(Phase 0–2)未触发翻案,6 条 scenario 保持锁定形态。Phase 3 manual
 checklist + evidence ledger 见 [`./test-plan-v2f.md`](./test-plan-v2f.md);
 该 plan 是 *如何* 在真机上证明每条 scenario,本表是 *什么* 必须被证明。
 
 
-| 编号 | 场景 | 通过判据(草案) |
+| 编号 | 场景 | 通过判据 |
 |---|---|---|
 | A | `list_elements` 全 happy path + parser 字段覆盖 | 在 Poppo 关注列表调 `list_elements` → 返回 `elements[]`(全 window),含 `resource-id` 为 `com.baitu.poppo:id/avatar` 的多个条目;**至少能观察到** `text` / `contentDesc` / `hint` / `checkable` / `clickable` 各字段在不同 element 上正确填充(证明 parser 扩展生效);artifact `ui-<id>.xml` + `list_elements` 事件 + `capture` 事件三件齐 |
 | B | filter rule + center 取整 | 同 dump 输入,`isUseful` 过滤后无文本无 id 无 clickable 的 LinearLayout 包装节点不在 list;degenerate-bounds 节点(`[0,0][0,0]`)不在 list;**奇数 bounds**(例如 `[10,10][101,101]`)的 element 取 `center = { x: 55, y: 55 }`(`Math.floor`)而非 `55.5` |
@@ -444,3 +446,75 @@ Q12 / § 失败语义 写的 `{isError:true}` 形态实际上是 *InMemoryTransp
   wire shape" 写清楚 —— 推后 README 维护周期处理,本 amendment 不补 README。
 - 不算 design 翻案 —— 锁 Q12 行为(rejection-before-handler / 不进 typed
   catalog)不变;只是真机阶段补足 transport 维度的 wire shape 描述。
+
+### 2026-05-25 · Scenario A `hint` 真机 Poppo 结构性不可达(算法保留,vitest 兜底)
+
+**原决策**(§ 验收 A):`list_elements` 真机 acceptance 必须观察到 `text` /
+`contentDesc` / `hint` / `checkable` / `clickable` 各字段在不同 element 上正确
+填充,证明 v2-F.0 Phase 0 parser additive 扩字段在线生效。
+
+**新决策**(amendment,非翻案):
+
+- `text` / `contentDesc` / `clickable` / `selected` —— 真机已在 关注列表 (原始
+  Scenario A run) 命中。
+- `checkable` + `checked` —— 真机已在 DynamicAddActivity 弹出的
+  `dialog_visibility_permission.xml` RadioButton 上命中(rerun 2026-05-25
+  runId `2026-05-25T08-28-25.204Z_huXV` captureId `d8b1829add06`)。
+- **`hint`** —— 在 Poppo 应用范围内**结构性不可达**;算法保留 + vitest 兜底,
+  acceptance Scenario A 该字段以本 amendment 形态收尾。
+
+**触发原因**(2026-05-25 Phase 3 cadence-A 第 2 次 audit 期):
+
+- codex 锁 1 个 blocking finding:Scenario A 验收 hint / checkable 真机未覆盖,
+  跟 Scenario C 同种 "locked criterion 真机降级" 形态,要么补真机,要么 amendment
+  形式。
+- `checkable` 已通过 rerun 补真机覆盖(visibility dialog RadioButton);**`hint`
+  rerun 真机仍然 null**,经分析根因如下:
+  - Poppo / Vone 全 codebase 走 *code-driven i18n*(workspace
+    `CLAUDE.md` 的 cross-repo common ground 第 1 条:**"i18n is code-driven,
+    never `android:text`"**)。translated string 来自
+    `TranslateResource.getStringResources(key)`,在 runtime 由 translation
+    binding 拦截并通过 `setText()`(而非 `setHint()`)注入到 View。
+  - 真机 DynamicAddActivity 上 `com.baitu.poppo:id/content` EditText 验证此假设:
+    layout XML 写明 `android:hint="@string/hint_think_sth"`,但 uiautomator
+    dump 给的是 `text:"说点什么记录这一刻…"` + `hint:null` —— 占位符路由到 text
+    字段。
+  - 结论:在 Poppo / Vone 任意可达屏,`UiNode.hint` 均结构性为 `null`,
+    `list_elements` 返回的 `Element.hint` 自然也是 `null`。这是 Poppo *app 端*
+    的 UI design choice 决定的,不是 v2-F 算法在解析端的缺陷。
+
+**算法正确性 evidence**(不依赖真机):
+
+- `server/tests/ui/hierarchy.test.ts` 现有 case *"extracts hint from inline XML
+  and treats absence as null"* —— inline 合成 EditText XML 带 `hint="Search"`,
+  断言 `UiNode.hint === "Search"`。
+- `server/tests/ui/list_elements.test.ts:45` *"propagates `hint` from a parsed
+  EditText through to the Element"* —— inline 合成 XML 验证 hint 从 parser 透到
+  Element。
+- 这两条断言任意 ROM / 任意 app 上只要 uiautomator dump emit `hint="..."`,
+  `list_elements` 就会 surface;Poppo 是因为 *app 端的 setHint() 没被调* 才让
+  hint 在 uiautomator dump 中为空 —— 把 v2-F 移植到任一 non-code-driven-i18n 的
+  app 上,这条断言会自然兑现。
+
+**影响范围**:
+
+- v2-F.0 acceptance Scenario A `hint` 字段在 Poppo 真机以本 amendment 形态收尾,
+  跟 Scenario C 三件齐 类似但性质更弱 —— **不需要** "三件齐",因为:
+  - (a) ledger 见 [`./test-plan-v2f.md`](./test-plan-v2f.md) § Scenario A 已记;
+  - (b) vitest inline-XML hint case 已存在;
+  - (c) 不需要 lock 形态 amendment 中 "原决策保留" 那种 "推后续 phase 真出现场景"
+        语句 —— hint 算法 *已经* 在两条 inline XML 测试上覆盖,Poppo 上的不可达
+        是 *app 端* 的设计选择,与 v2-F 在 *任意非 Poppo app* 上的行为正交;
+        本 amendment 就是 (c)。
+- 不算 design 翻案 —— 锁 Q5 / § Element schema 关于 hint 的提取契约不变,锁
+  § 验收 A 关于 hint 的判据本质不变;只是真机阶段在 Poppo 这一 app 上由 app 端的
+  UI design choice 决定它不出现,acceptance ledger 标记并指向 vitest + 本
+  amendment。
+- 类比 v2-A 时 Scenario B (no-anchor):Poppo 容器结构让真机不可能产生
+  `anchorSource:"none"`,acceptance 也是 ledger + vitest 兜底 + 拆 B-1/B-2/B-3
+  子检查(详见 [`./test-plan-v2a.md`](./test-plan-v2a.md) § Scenario B)—— 本
+  amendment 沿用同样体例,只是把 sub-check 拆解写在本 lock § Amendments 而非
+  test-plan。
+- 未来若 v2-F 接入非 code-driven-i18n 的 app(如 popposhell Compose flavor 或
+  外部 partner app),hint 真机 surface 会自然命中,不需要修订本 amendment 或本
+  lock —— 本 amendment 只声明 Poppo / Vone *目前* 不可达。
