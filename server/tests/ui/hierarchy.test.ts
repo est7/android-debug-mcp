@@ -196,12 +196,25 @@ describe("parseUiHierarchy — edge cases", () => {
   });
 
   it("preserves an out-of-range numeric reference as the literal entity", () => {
-    // Surrogate ranges + values beyond U+10FFFF are not legal code points;
-    // the decoder returns the original `&#N;` rather than a synthesized
-    // replacement character so the caller can see uiautomator emitted junk.
+    // Values beyond U+10FFFF are not legal Unicode code points; the decoder
+    // returns the original `&#N;` rather than a synthesized replacement
+    // character so the caller can see uiautomator emitted junk.
     const xml =
       '<hierarchy><node class="X" package="p" bounds="[0,0][10,10]" text="&#9999999999;" /></hierarchy>';
     expect(parseUiHierarchy(xml)[0]?.text).toBe("&#9999999999;");
+  });
+
+  it("preserves a surrogate-range numeric reference as the literal entity", () => {
+    // Lone surrogate halves (`U+D800..U+DFFF`) are not legal stand-alone code
+    // points; emitting a lone surrogate from `String.fromCodePoint` would
+    // produce a broken UTF-16 string. Decoder rejects and preserves the
+    // literal entity (decimal + hex forms).
+    const decXml =
+      '<hierarchy><node class="X" package="p" bounds="[0,0][10,10]" text="&#55296;" /></hierarchy>';
+    expect(parseUiHierarchy(decXml)[0]?.text).toBe("&#55296;");
+    const hexXml =
+      '<hierarchy><node class="X" package="p" bounds="[0,0][10,10]" text="&#xD800;" /></hierarchy>';
+    expect(parseUiHierarchy(hexXml)[0]?.text).toBe("&#xD800;");
   });
 
   it("preserves a non-numeric `&#abc;` reference as the literal entity", () => {

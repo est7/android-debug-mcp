@@ -233,8 +233,12 @@ function decodeEntities(s: string): string {
 }
 
 /** Convert a Unicode code point to its `String` form, returning `null` for an
- * out-of-range value so the caller preserves the literal entity reference. */
+ * out-of-range value so the caller preserves the literal entity reference.
+ * Surrogate halves (`U+D800..U+DFFF`) are not legal stand-alone code points —
+ * an entity reference that names one is rejected here rather than producing a
+ * lone surrogate that would break downstream UTF-16 string operations. */
 function decodeCodePoint(code: number): string | null {
   if (!Number.isFinite(code) || code < 0 || code > 0x10ffff) return null;
+  if (code >= 0xd800 && code <= 0xdfff) return null;
   return String.fromCodePoint(code);
 }
