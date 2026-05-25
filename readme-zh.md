@@ -10,7 +10,7 @@
 可转交同事的目录。它刻意 **不做** 基于元素的 UI 自动化(不碰 AccessibilityService、
 不按控件树点击)——见 [与 mobile-mcp 共存](#与-mobile-mcp-共存)。
 
-状态:**v1 (0.2.0)** —— 17 个工具全部注册;五条验收场景真机通过。
+状态:**v2-A (0.3.0)** —— 19 个工具全部注册;v1 与 v2-A 的验收场景均真机通过。
 
 ## 前置要求
 
@@ -72,7 +72,7 @@ claude mcp add android-debug -- npx -y github:est7/android-debug-mcp
 `metadata.json`、`events.jsonl`、`commands.jsonl`、`logcat.jsonl`、
 `logcat.raw.txt`、`crash.jsonl`、`summary.md`,以及一个 `artifacts/` 子目录。
 
-## 17 个工具
+## 19 个工具
 
 每个工具都叫 `android_debug_*`,返回 `structuredContent`。工具 **成功** 时返回
 `structuredContent`;**可恢复的失败** 则返回 `{ isError: true }`,把 JSON 形态的
@@ -85,6 +85,7 @@ claude mcp add android-debug -- npx -y github:est7/android-debug-mcp
 | **交互** | `tap`、`input_text`、`send_key`、`swipe`、`capture` |
 | **证据检索** | `search_logs`、`extract_crash_context`、`get_run_summary` |
 | **设备与 run 管理** | `list_devices`、`list_runs`、`collect_bundle` |
+| **Tap-to-source(v2-A)** | `tap_node`、`map_ui_node_to_source` |
 
 会话按 `(deviceSerial, userId, packageName)` 三元组单例——一个 app 在一台设备上
 同一时刻只有一个活跃 run。每次交互 / 证据调用都带上 `start_session` 返回的 `runId`。

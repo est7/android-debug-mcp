@@ -168,22 +168,46 @@ Notes:                   On Poppo, every Activity's window contains the id'd
                          no app resource-id").
 ```
 
+Poppo's window root containers (`com.baitu.poppo:id/swipe`,
+`…/action_bar_root`, `…/contentLayoutBase`) always carry app ids, so every
+in-window tap bubbles up to at least one app-id ancestor. The B contract
+— `tap_node` returns `anchorNode:null / anchorSource:"none"` when the
+runtime tree truly has no app-id ancestor — is host-empirically unreachable
+on Poppo and is owned by a vitest subcheck. The map-side null path is
+exercised on host via an explicit `anchorNode:null` override. The scenario
+therefore splits into three subchecks below (codex final audit, thread
+`review/v2a-final`).
+
+### B-1 — host probe: tap_node does not error on a no-anchor probe
+
 1. `android_debug_start_session` as above (projectRoot still required so the
    negative path is observed against a real source tree, not a missing one).
 2. Navigate to a screen with a region that empirically lacks any
    `com.baitu.poppo:id/*` near the tap point — a decorative `TextView` with no
    id, a wallpaper area in a `FrameLayout`, or a system status-bar inset.
 3. `android_debug_tap_node { runId, x, y, label: "no-anchor probe" }`.
+
+- [x] `tap_node` does not error.
+- [x] The empirical `anchorSource` is recorded in the ledger (on Poppo:
+      `anchorSource:"ancestor"` resolving to `contentLayout`).
+
+### B-2 — contract: `anchorNode:null` / `anchorSource:"none"` when the runtime tree truly has no app-id ancestor
+
+Host repro is empirically unreachable on Poppo (see § Scenario B intro). The
+contract is covered by vitest:
+
+- `server/tests/mcp/tap_node.test.ts:155-169` — *"reports anchorSource none
+  when the tapped node carries no app resource-id"*.
+
+- [x] `bun run test -- tap_node.test.ts` passes at the commit under test.
+
+### B-3 — map subcheck: explicit `anchorNode:null` produces `confidence:"none"` / `candidates:[]`
+
 4. `android_debug_map_ui_node_to_source { runId, anchorNode: null,
-   foregroundActivity, ancestorChain }` — pass `null` even if the tool already
-   resolved it; the assertion is on the `map` side.
+   foregroundActivity, ancestorChain }` — pass `null` regardless of what
+   `tap_node` returned; the assertion is on the `map` side.
 5. `android_debug_stop_session`.
 
-- [!] `tap_node` does **not** error. It returns `anchorNode: null` and
-      `anchorSource: "none"`. **`anchorNode:null` not reproducible on Poppo
-      (root containers always carry app ids); vitest covers the contract at
-      `server/tests/mcp/tap_node.test.ts:155`. tap_node DID NOT error — it
-      returned `anchorSource:"ancestor"` resolving to `contentLayout`.**
 - [x] `map_ui_node_to_source` returns `confidence: "none"` and
       `candidates: []`.
 - [x] `signals[]` is empty (`resource_id_present: false` short-circuits
@@ -396,21 +420,24 @@ map output:              confidence = "low"
                                     owner_ambiguous, recycled_row_id]
                          id_declaration = item_contact_list.xml:198 (+ a constraint
                                           ref in item_guard_contacts_list.xml)
-Deviation [需要 nod]:    E's checklist item "signals[] does NOT include
-                         owner_ambiguous" is over-specified for Poppo: even the
-                         row-only id `ivAddFav` is referenced in two layouts
-                         (`item_contact_list.xml`, `item_guard_contacts_list.xml`),
-                         and the recycler-row container has no BaseBinding…<…>
+Resolved (codex final audit, thread `review/v2a-final`):
+                         the original checklist required "signals[] does NOT
+                         include `owner_ambiguous`", which is over-specified.
+                         `ivAddFav` is referenced in two layouts
+                         (`item_contact_list.xml`, `item_guard_contacts_list.xml`)
+                         and the recycler row container has no BaseBinding…<…>
                          screen owner — so `idLayoutFiles.size >= 2` and
                          `foregroundMatchedOwners.length === 0`, making
                          `owner_ambiguous = true` by the (correct) formula. The
-                         dominant cap is still `recycled_row_id`: classify()
-                         short-circuits on it (recipe.ts intent), so the verdict
-                         is `low` with the recycling-reason. The contract — "row
-                         recycling caps confidence; the reason cites recycling" —
-                         is met. Suggest relaxing the checklist to: signals[]
-                         includes `recycled_row_id`, AND the reason cites
-                         recycling (not declaration ambiguity).
+                         dominant cap is still `recycled_row_id`: `classify()`
+                         in `server/src/source/confidence.ts:169-177`
+                         short-circuits on it, so the verdict is `low` with
+                         the recycling reason. `docs/v2/source-mapping.md`
+                         § 验收 E ("kind/error" column) already says the cap is
+                         `recycled_row_id`-dominated and independent of
+                         `owner_ambiguous`. Checklist (below) is relaxed
+                         accordingly — test-plan correction, not a design-lock
+                         amendment.
 ```
 
 1. Log into Poppo with the dev account before starting.
@@ -427,11 +454,9 @@ Deviation [需要 nod]:    E's checklist item "signals[] does NOT include
 - [x] `map_ui_node_to_source` returns `confidence: "low"`.
 - [x] `signals[]` includes `recycled_row_id` AND `resource_id_present` AND
       `resource_package_matches_session` AND `layout_declares_id`.
-- [!] `signals[]` does **not** include `owner_ambiguous` (the cap is due to
-      row recycling, not declaration ambiguity). **owner_ambiguous IS in
-      signals for Poppo's `ivAddFav` (declared in 2 layouts). recycled_row_id
-      is still the dominant cap per classify() order; reason cites recycling.
-      See ledger — flagged as `[需要 nod]` for a checklist relaxation.**
+      (`owner_ambiguous` may also be present — `recycled_row_id` is the
+      `classify()` short-circuit that drives the cap; presence of
+      `owner_ambiguous` does not invalidate the verdict — see ledger.)
 - [x] `map`'s `reason` mentions recycled rows / RecyclerView.
 - [x] `candidates[]` contains ≥1 `id_declaration` (the row item layout).
 

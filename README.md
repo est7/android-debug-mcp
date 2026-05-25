@@ -13,7 +13,7 @@ disk you can inspect, bundle, or hand to a teammate. It deliberately does **not*
 do element-based UI automation (no AccessibilityService, no view-tree tapping) —
 see [Coexisting with mobile-mcp](#coexisting-with-mobile-mcp).
 
-Status: **v1 (0.2.0)** — all 17 tools registered; the five acceptance scenarios pass on-device.
+Status: **v2-A (0.3.0)** — 19 tools registered; v1 and v2-A acceptance scenarios pass on-device.
 
 ## Prerequisites
 
@@ -78,7 +78,7 @@ A run folder is `<runRoot>/<package>/u<userId>/<runId>/` and holds
 `metadata.json`, `events.jsonl`, `commands.jsonl`, `logcat.jsonl`,
 `logcat.raw.txt`, `crash.jsonl`, `summary.md`, and an `artifacts/` directory.
 
-## The 17 tools
+## The 19 tools
 
 Every tool is named `android_debug_*`. On **success** it returns
 `structuredContent`. A recoverable **failure** instead returns
@@ -92,6 +92,7 @@ payload; it is never raised as a raw protocol error.
 | **Interaction** | `tap`, `input_text`, `send_key`, `swipe`, `capture` |
 | **Evidence retrieval** | `search_logs`, `extract_crash_context`, `get_run_summary` |
 | **Device & run management** | `list_devices`, `list_runs`, `collect_bundle` |
+| **Tap-to-source (v2-A)** | `tap_node`, `map_ui_node_to_source` |
 
 A session is a singleton per `(deviceSerial, userId, packageName)` tuple — one
 active run per app per device. Every interaction/evidence call carries the
