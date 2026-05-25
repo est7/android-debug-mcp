@@ -11,7 +11,7 @@ The design lock's contract is *what* each scenario must prove; this file is
 ## Prerequisites
 
 - `bun run lint && bun run typecheck && bun run test` green at the commit
-  under test (baseline 501 / 501 as of `8f45bd2`).
+  under test (baseline 506 / 506 as of `d50b695`).
 - A device in `adb devices` state `device`. The primary target is Poppo on
   POCO F3 serial `951a20a2`.
 - The MCP server wired into a host (Cursor / Claude Desktop / equivalent) per
@@ -71,6 +71,35 @@ Acceptance does not pass if `metadata.projectRoot` in the recorded run is
 right Activity / Fragment with `confidence: "high"` and a code reference inside
 the resolved screen owner.
 
+```text
+Scenario:                A — happy path
+Date / operator:         2026-05-25 / est9
+Device serial / API:     951a20a2 / 33
+Poppo package / version: com.baitu.poppo / 3.13.0.17.1 (versionCode 31300171)
+Poppo repo SHA:          f9fc1099b6d9adbb77afa21ede26d2d77d26ad5b
+MCP server commit:       d50b695d859f9c945b358fa7cb6cd8300ecc9d72
+runId / runDir:          2026-05-25T03-35-21.378Z_Ui2F
+                         /Users/est9/AndroidStudioProjects/submodulepoppo/.android-debug-runs/com.baitu.poppo/u0/2026-05-25T03-35-21.378Z_Ui2F
+Target:                  tv_nickname (nickname row) in EditProfileActivity
+                         (BaseBindingActivity<ActivityEditProfileBinding>)
+                         x=540 y=1619
+tap_node output:         anchorNode = com.baitu.poppo:id/tv_nickname (TextView)
+                         anchorSource = "tapped_node"
+                         preTapForegroundActivity = com.baitu.poppo/...editprofile.EditProfileActivity
+                         preTapCaptureId = 7f38826a81d2 → artifacts/ui-7f38826a81d2.xml (26K)
+map output:              confidence = "high"
+                         signals = [resource_id_present, resource_package_matches_session,
+                                    layout_declares_id, layout_inflated_by_foreground_activity,
+                                    code_refs_found]
+                         resolved screen_owner = .../EditProfileActivity.kt:50
+                         matching code_ref = .../EditProfileActivity.kt:159
+                                  (binding.tvNickname.text = it)
+Notes:                   tv_nickname is declared in 34 layouts; foreground
+                         Activity uniquely disambiguates to EditProfileActivity.
+                         (Same evidence simultaneously satisfies Scenario C's
+                         disambiguation contract.)
+```
+
 1. `android_debug_start_session` per the projectRoot block above.
 2. Navigate to a screen with a clearly-id'd, obviously-clickable element. The
    login screen's primary CTA, or any settings list row whose id is in
@@ -84,26 +113,60 @@ the resolved screen owner.
    foregroundActivity: <preTapForegroundActivity>, ancestorChain }`.
 6. `android_debug_stop_session { runId }`.
 
-- [ ] `tap_node` returns `anchorNode != null` and
+- [x] `tap_node` returns `anchorNode != null` and
       `anchorSource ∈ {"tapped_node", "ancestor"}`.
-- [ ] The pre-tap dump file `artifacts/ui-<preTapCaptureId>.xml` exists under
+- [x] The pre-tap dump file `artifacts/ui-<preTapCaptureId>.xml` exists under
       the run's folder.
-- [ ] `map_ui_node_to_source` returns `confidence: "high"`.
-- [ ] `signals[]` contains all of: `resource_id_present`,
+- [x] `map_ui_node_to_source` returns `confidence: "high"`.
+- [x] `signals[]` contains all of: `resource_id_present`,
       `resource_package_matches_session`, `layout_declares_id`, `code_refs_found`.
-- [ ] `candidates[]` contains at least one `id_declaration`, one
+- [x] `candidates[]` contains at least one `id_declaration`, one
       `screen_owner`, and one `code_ref`.
-- [ ] The `code_ref` candidate's `file` matches the resolved `screen_owner`
+- [x] The `code_ref` candidate's `file` matches the resolved `screen_owner`
       candidate's `file` (i.e. the handler lives inside the owner).
-- [ ] `events.jsonl` for the run contains one `tap_node` event and one
+- [x] `events.jsonl` for the run contains one `tap_node` event and one
       `source_mapping` event.
-- [ ] `commands.jsonl` for the run contains ≥1 `{ tool: "map_ui_node_to_source",
+- [x] `commands.jsonl` for the run contains ≥1 `{ tool: "map_ui_node_to_source",
       rg: "..." }` line.
 
 ## Scenario B — no anchor
 
 **Goal:** a tap on a node with no app-package `resource-id` ancestor produces
 a soft `none` result — no error, no false-positive candidates.
+
+```text
+Scenario:                B — no anchor (map-side contract)
+Date / operator:         2026-05-25 / est9
+Device serial / API:     951a20a2 / 33
+Poppo package / version: com.baitu.poppo / 3.13.0.17.1
+Poppo repo SHA:          f9fc1099b6d9adbb77afa21ede26d2d77d26ad5b
+MCP server commit:       d50b695d859f9c945b358fa7cb6cd8300ecc9d72
+runId / runDir:          2026-05-25T03-35-21.378Z_Ui2F (shared with A/C/E —
+                         only D requires a separate run)
+Target (probe):          divider region in EditInformationNicknameActivity
+                         x=540 y=1400 (decorative android.view.View, no id)
+tap_node output:         anchorNode = com.baitu.poppo:id/contentLayout (ancestor)
+                         anchorSource = "ancestor"  ← NOT "none"
+                         preTapForegroundActivity = .../EditInformationNicknameActivity
+                         (real-device limitation — see notes)
+map output:              (called with anchorNode = null per step 4 explicit instruction)
+                         confidence = "none"
+                         reason   = "No resource-id anchor was provided; there is
+                                     nothing to map."
+                         signals  = []
+                         candidates = []
+Notes:                   On Poppo, every Activity's window contains the id'd
+                         containers `com.baitu.poppo:id/swipe`,
+                         `…/action_bar_root`, `…/contentLayoutBase`. Any in-window
+                         tap therefore bubbles up to at least one app-id ancestor;
+                         tap_node cannot empirically produce `anchorNode:null` +
+                         `anchorSource:"none"` against this app. Mapping null
+                         is exercised via step 4's explicit override; tap_node's
+                         `anchorSource:"none"` contract is locked by
+                         server/tests/mcp/tap_node.test.ts:155
+                         ("reports anchorSource none when the tapped node carries
+                         no app resource-id").
+```
 
 1. `android_debug_start_session` as above (projectRoot still required so the
    negative path is observed against a real source tree, not a missing one).
@@ -116,14 +179,17 @@ a soft `none` result — no error, no false-positive candidates.
    resolved it; the assertion is on the `map` side.
 5. `android_debug_stop_session`.
 
-- [ ] `tap_node` does **not** error. It returns `anchorNode: null` and
-      `anchorSource: "none"`.
-- [ ] `map_ui_node_to_source` returns `confidence: "none"` and
+- [!] `tap_node` does **not** error. It returns `anchorNode: null` and
+      `anchorSource: "none"`. **`anchorNode:null` not reproducible on Poppo
+      (root containers always carry app ids); vitest covers the contract at
+      `server/tests/mcp/tap_node.test.ts:155`. tap_node DID NOT error — it
+      returned `anchorSource:"ancestor"` resolving to `contentLayout`.**
+- [x] `map_ui_node_to_source` returns `confidence: "none"` and
       `candidates: []`.
-- [ ] `signals[]` is empty (`resource_id_present: false` short-circuits
+- [x] `signals[]` is empty (`resource_id_present: false` short-circuits
       classification).
-- [ ] `map`'s `reason` mentions the missing anchor.
-- [ ] `events.jsonl` contains both events; no error log is written for this run.
+- [x] `map`'s `reason` mentions the missing anchor.
+- [x] `events.jsonl` contains both events; no error log is written for this run.
 
 ## Scenario C — ambiguity disambiguated
 
@@ -142,6 +208,37 @@ not `owner_ambiguous`.
 running interactively.) Pick one that you can navigate to (an id in a layout
 inflated by a screen you can reach without side effects).
 
+```text
+Scenario:                C — ambiguity disambiguated
+Date / operator:         2026-05-25 / est9
+Device serial / API:     951a20a2 / 33
+Poppo package / version: com.baitu.poppo / 3.13.0.17.1
+Poppo repo SHA:          f9fc1099b6d9adbb77afa21ede26d2d77d26ad5b
+MCP server commit:       d50b695d859f9c945b358fa7cb6cd8300ecc9d72
+runId / runDir:          2026-05-25T03-35-21.378Z_Ui2F
+Target:                  com.baitu.poppo:id/nickname (FrameLayout)
+                         in EditProfileActivity, x=200 y=1619
+                         id declared in 54 layouts (the duplicate)
+tap_node output:         anchorNode = com.baitu.poppo:id/nickname (FrameLayout)
+                         anchorSource = "tapped_node"
+                         preTapForegroundActivity = .../editprofile.EditProfileActivity
+map output:              confidence = "high"
+                         reason = "The id resolves to a single screen owner,
+                                   confirmed by the foreground Activity, with
+                                   a code reference inside it."
+                         signals = [resource_id_present, resource_package_matches_session,
+                                    layout_declares_id,
+                                    layout_inflated_by_foreground_activity,
+                                    code_refs_found]
+                         id_declarations = many (54)
+                         screen_owner candidates:
+                           - EditProfileActivity.kt:50  ← matches foreground simple name
+                           - PurchasingGuardFragment.kt:57 (non-foreground)
+                         code_ref in resolved owner = EditProfileActivity.kt:105
+                                  (binding.nickname.onClick { nickname() })
+                         owner_ambiguous = false (foreground singled out one owner)
+```
+
 1. `start_session` as above.
 2. Navigate to the Activity / Fragment that inflates the layout containing the
    chosen id. Confirm via `adb shell dumpsys activity activities | head -40` if
@@ -150,15 +247,15 @@ inflated by a screen you can reach without side effects).
 4. `map_ui_node_to_source` with the tap result.
 5. `stop_session`.
 
-- [ ] `tap_node` returns a non-null `anchorNode`.
-- [ ] `map_ui_node_to_source` returns `confidence: "high"` or `"medium"`.
-- [ ] `signals[]` does **not** include `owner_ambiguous`.
-- [ ] `signals[]` includes `layout_inflated_by_foreground_activity`.
-- [ ] `candidates[]` contains ≥2 `id_declaration` entries.
-- [ ] Exactly one `screen_owner` candidate has a `file` whose basename without
+- [x] `tap_node` returns a non-null `anchorNode`.
+- [x] `map_ui_node_to_source` returns `confidence: "high"` or `"medium"`.
+- [x] `signals[]` does **not** include `owner_ambiguous`.
+- [x] `signals[]` includes `layout_inflated_by_foreground_activity`.
+- [x] `candidates[]` contains ≥2 `id_declaration` entries.
+- [x] Exactly one `screen_owner` candidate has a `file` whose basename without
       extension equals the simple class name of `preTapForegroundActivity`
       (e.g. `LoginActivity.kt` ↔ `…/LoginActivity`).
-- [ ] If `confidence: "high"`, the `code_ref` candidate's file matches that
+- [x] If `confidence: "high"`, the `code_ref` candidate's file matches that
       same owner file.
 
 ## Scenario D — failure semantics
@@ -170,6 +267,25 @@ gets its own `start_session` and `runId`).
 
 **Goal:** when the pre-tap dump fails, `tap_node` returns a hard error and the
 `input tap` is never sent (no `tap_node` event written).
+
+```text
+Scenario:                D-a — pre-tap dump failure
+Date / operator:         2026-05-25 / est9
+Device serial / API:     951a20a2 / 33
+MCP server commit:       d50b695d859f9c945b358fa7cb6cd8300ecc9d72
+Host repro:              skipped — lock-screen / USB-disconnect race not chased
+                         per handoff guidance ("If not reproducible, do not
+                         chase it — record the vitest fallback and move on.")
+vitest evidence:         server/tests/mcp/tap_node.test.ts:172
+                           "fails with ui_dump_failed and does NOT tap when
+                            the pre-tap dump fails"
+                         server/tests/mcp/tap_node.test.ts:213
+                           "fails with ui_dump_failed when the dumped XML is
+                            unparseable, and does NOT tap"
+Result:                  bun run test tests/mcp/tap_node.test.ts → 7/7 passed
+                         (rerun at d50b695)
+```
+
 
 Host repro is best-effort; common triggers are locking the device or
 disconnecting USB between the call dispatch and `uiautomator dump`. If neither
@@ -183,12 +299,14 @@ is reproducible on this device, fall back to the vitest evidence below.
 4. Reconnect / unlock.
 5. `stop_session`.
 
-- [ ] `tap_node` returns `{ isError: true, code: "ui_dump_failed" }` (or
+- [!] `tap_node` returns `{ isError: true, code: "ui_dump_failed" }` (or
       another hard adb error if the disconnect path won the race — in which
-      case retry with the lock path).
-- [ ] `events.jsonl` contains **no** `tap_node` event for this attempt.
-- [ ] The device shows no spurious tap at (100, 100) — i.e. `input tap` did
-      not run.
+      case retry with the lock path). **Host repro skipped; vitest covers it
+      (see ledger).**
+- [!] `events.jsonl` contains **no** `tap_node` event for this attempt.
+      **Host repro skipped; vitest asserts the no-tap invariant.**
+- [!] The device shows no spurious tap at (100, 100) — i.e. `input tap` did
+      not run. **Host repro skipped; vitest asserts the no-tap invariant.**
 
 **vitest fallback (always runs):** the contract is unit-tested by
 `server/tests/mcp/tap_node.test.ts` — `pre-tap dump failure` case asserts the
@@ -200,6 +318,19 @@ test as the canonical proof.
 
 **Goal:** `map_ui_node_to_source` returns a hard `rg_not_found` when ripgrep
 is unavailable; no partial `source_mapping` event is written.
+
+```text
+Scenario:                D-b — rg_not_found
+Date / operator:         2026-05-25 / est9
+MCP server commit:       d50b695d859f9c945b358fa7cb6cd8300ecc9d72
+D-b verified via:        server/tests/source/rg.test.ts
+                         server/tests/mcp/map_ui_node_to_source.test.ts
+Host repro:              skipped (would require global PATH mutation).
+Result:                  bun run test tests/source/rg.test.ts → 9/9 passed
+                         bun run test tests/mcp/map_ui_node_to_source.test.ts → 9/9 passed
+                         (rerun at d50b695)
+```
+
 
 Host repro requires mutating the server's `PATH` (or moving the `rg` binary)
 to make `which rg` fail, then restarting the server — a global-state change
@@ -219,10 +350,10 @@ D-b verified via: server/tests/source/rg.test.ts
 Host repro: skipped (would require global PATH mutation).
 ```
 
-- [ ] `bun run test -- rg.test.ts` passes at the commit under test.
-- [ ] `bun run test -- map_ui_node_to_source.test.ts` passes at the commit
+- [x] `bun run test -- rg.test.ts` passes at the commit under test.
+- [x] `bun run test -- map_ui_node_to_source.test.ts` passes at the commit
       under test.
-- [ ] Manual note recorded in the evidence ledger per the format above.
+- [x] Manual note recorded in the evidence ledger per the format above.
 
 ## Scenario E — RecyclerView row id reuse caps confidence
 
@@ -234,6 +365,54 @@ Use the **关注 / 粉丝列表** (followers/followees list) — it has the righ
 shape (typed `RecyclerView` with per-row `binding.<x>` children) and the data
 can be made stable in a dev account.
 
+```text
+Scenario:                E — RecyclerView row id reuse
+Date / operator:         2026-05-25 / est9
+Device serial / API:     951a20a2 / 33
+Poppo package / version: com.baitu.poppo / 3.13.0.17.1
+Poppo repo SHA:          f9fc1099b6d9adbb77afa21ede26d2d77d26ad5b
+MCP server commit:       d50b695d859f9c945b358fa7cb6cd8300ecc9d72
+runId / runDir:          2026-05-25T03-35-21.378Z_Ui2F
+Target:                  first row's ivAddFav (ImageView) at x=990 y=441,
+                         inside ContactsActivity's recycler_view.
+                         Reached via Me-tab → follow_layout (which on this
+                         device opens ContactsActivity, not a dedicated
+                         followers/followees activity — same RecyclerView
+                         shape, qualifies the contract).
+tap_node output:         anchorNode = com.baitu.poppo:id/ivAddFav (ImageView)
+                         anchorSource = "tapped_node"
+                         ancestorChain contains:
+                           com.baitu.poppo:id/ivAddFavLayout (LinearLayout)
+                           androidx.recyclerview.widget.RecyclerView ← row container
+                         preTapForegroundActivity = .../contacts.ContactsActivity
+map output:              confidence = "low"
+                         reason = "The tapped node sits inside a recycling
+                                   container (RecyclerView/ListView/GridView);
+                                   its id is reused across rows, so confidence
+                                   is capped."
+                         signals = [resource_id_present,
+                                    resource_package_matches_session,
+                                    layout_declares_id, code_refs_found,
+                                    owner_ambiguous, recycled_row_id]
+                         id_declaration = item_contact_list.xml:198 (+ a constraint
+                                          ref in item_guard_contacts_list.xml)
+Deviation [需要 nod]:    E's checklist item "signals[] does NOT include
+                         owner_ambiguous" is over-specified for Poppo: even the
+                         row-only id `ivAddFav` is referenced in two layouts
+                         (`item_contact_list.xml`, `item_guard_contacts_list.xml`),
+                         and the recycler-row container has no BaseBinding…<…>
+                         screen owner — so `idLayoutFiles.size >= 2` and
+                         `foregroundMatchedOwners.length === 0`, making
+                         `owner_ambiguous = true` by the (correct) formula. The
+                         dominant cap is still `recycled_row_id`: classify()
+                         short-circuits on it (recipe.ts intent), so the verdict
+                         is `low` with the recycling-reason. The contract — "row
+                         recycling caps confidence; the reason cites recycling" —
+                         is met. Suggest relaxing the checklist to: signals[]
+                         includes `recycled_row_id`, AND the reason cites
+                         recycling (not declaration ambiguity).
+```
+
 1. Log into Poppo with the dev account before starting.
 2. `start_session` as above.
 3. Navigate to the followers or followees list.
@@ -242,24 +421,30 @@ can be made stable in a dev account.
 5. `map_ui_node_to_source` with the tap result.
 6. `stop_session`.
 
-- [ ] `tap_node` returns a non-null `anchorNode`.
-- [ ] `ancestorChain[].class` contains at least one entry whose class name
+- [x] `tap_node` returns a non-null `anchorNode`.
+- [x] `ancestorChain[].class` contains at least one entry whose class name
       includes `RecyclerView`, `ListView`, or `GridView`.
-- [ ] `map_ui_node_to_source` returns `confidence: "low"`.
-- [ ] `signals[]` includes `recycled_row_id` AND `resource_id_present` AND
+- [x] `map_ui_node_to_source` returns `confidence: "low"`.
+- [x] `signals[]` includes `recycled_row_id` AND `resource_id_present` AND
       `resource_package_matches_session` AND `layout_declares_id`.
-- [ ] `signals[]` does **not** include `owner_ambiguous` (the cap is due to
-      row recycling, not declaration ambiguity).
-- [ ] `map`'s `reason` mentions recycled rows / RecyclerView.
-- [ ] `candidates[]` contains ≥1 `id_declaration` (the row item layout).
+- [!] `signals[]` does **not** include `owner_ambiguous` (the cap is due to
+      row recycling, not declaration ambiguity). **owner_ambiguous IS in
+      signals for Poppo's `ivAddFav` (declared in 2 layouts). recycled_row_id
+      is still the dominant cap per classify() order; reason cites recycling.
+      See ledger — flagged as `[需要 nod]` for a checklist relaxation.**
+- [x] `map`'s `reason` mentions recycled rows / RecyclerView.
+- [x] `candidates[]` contains ≥1 `id_declaration` (the row item layout).
 
 ---
 
 ## After all five
 
-- [ ] `bun run lint && bun run typecheck && bun run test` still green at the
+- [x] `bun run lint && bun run typecheck && bun run test` still green at the
       commit being audited.
-- [ ] Each scenario has a filled-in evidence ledger committed (or pasted into
+- [x] Each scenario has a filled-in evidence ledger committed (or pasted into
       the audit message — final form is the auditor's call).
-- [ ] Any newly harvested fixtures under `server/tests/fixtures/ui/` are
-      committed and their derived parser/hit-test tests pass.
+- [x] Any newly harvested fixtures under `server/tests/fixtures/ui/` are
+      committed and their derived parser/hit-test tests pass. **No new
+      fixtures were harvested for this acceptance run — existing
+      poppo-overlay.xml / poppo-follow-list.xml / poppo-homepage.xml cover
+      the scenarios; no parser/hit-test gap surfaced on the live device.**
