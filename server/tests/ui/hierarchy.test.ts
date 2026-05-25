@@ -65,6 +65,78 @@ describe("parseUiHierarchy — formatted login fixture", () => {
   });
 });
 
+describe("parseUiHierarchy — v2-F additive fields", () => {
+  it("extracts non-empty text and normalizes empty text to null", () => {
+    const all = flatten(parseUiHierarchy(fixture("login.xml")));
+    const header = all.find((n) => n.resourceId === "com.example.app:id/header");
+    expect(header?.text).toBe("Sign in");
+    // The login root carries text="" — uiautomator emits the attribute as empty,
+    // not absent; normalize to null so consumers handle "no text" uniformly.
+    const root = all.find((n) => n.resourceId === "com.example.app:id/login_root");
+    expect(root?.text).toBeNull();
+  });
+
+  it("extracts content-desc and normalizes empty to null", () => {
+    const all = flatten(parseUiHierarchy(fixture("login.xml")));
+    const username = all.find((n) => n.resourceId === "com.example.app:id/username");
+    expect(username?.contentDesc).toBe("Username");
+    const header = all.find((n) => n.resourceId === "com.example.app:id/header");
+    expect(header?.contentDesc).toBeNull();
+  });
+
+  it("extracts hint from inline XML and treats absence as null", () => {
+    const xml =
+      '<hierarchy><node class="android.widget.EditText" package="p" bounds="[0,0][100,40]" hint="Search" /></hierarchy>';
+    expect(parseUiHierarchy(xml)[0]?.hint).toBe("Search");
+    const all = flatten(parseUiHierarchy(fixture("login.xml")));
+    expect(all.every((n) => n.hint === null)).toBe(true);
+  });
+
+  it("extracts checkable=true from a real CheckBox; default false otherwise", () => {
+    const all = flatten(parseUiHierarchy(fixture("login.xml")));
+    const remember = all.find((n) => n.resourceId === "com.example.app:id/remember");
+    expect(remember?.checkable).toBe(true);
+    const header = all.find((n) => n.resourceId === "com.example.app:id/header");
+    expect(header?.checkable).toBe(false);
+  });
+
+  it("extracts checked=true from inline XML", () => {
+    const xml =
+      '<hierarchy><node class="android.widget.CheckBox" package="p" bounds="[0,0][100,100]" checkable="true" checked="true" /></hierarchy>';
+    const node = parseUiHierarchy(xml)[0];
+    expect(node?.checkable).toBe(true);
+    expect(node?.checked).toBe(true);
+  });
+
+  it("extracts focused=true from the username EditText", () => {
+    const all = flatten(parseUiHierarchy(fixture("login.xml")));
+    const username = all.find((n) => n.resourceId === "com.example.app:id/username");
+    expect(username?.focused).toBe(true);
+    const password = all.find((n) => n.resourceId === "com.example.app:id/password");
+    expect(password?.focused).toBe(false);
+  });
+
+  it("extracts selected=true from a tab-strip node in poppo-homepage", () => {
+    const all = flatten(parseUiHierarchy(fixture("poppo-homepage.xml")));
+    const selectedTabs = all.filter(
+      (n) => n.resourceId === "com.baitu.poppo:id/ivTabIcon" && n.selected,
+    );
+    expect(selectedTabs.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("defaults all four boolean state fields to false when attributes are absent", () => {
+    const xml = '<hierarchy><node class="A" package="p" bounds="[0,0][1,1]" /></hierarchy>';
+    const node = parseUiHierarchy(xml)[0];
+    expect(node?.checkable).toBe(false);
+    expect(node?.checked).toBe(false);
+    expect(node?.focused).toBe(false);
+    expect(node?.selected).toBe(false);
+    expect(node?.text).toBeNull();
+    expect(node?.contentDesc).toBeNull();
+    expect(node?.hint).toBeNull();
+  });
+});
+
 describe("parseUiHierarchy — edge cases", () => {
   it("an empty hierarchy yields no roots", () => {
     expect(parseUiHierarchy('<hierarchy rotation="0"></hierarchy>')).toEqual([]);

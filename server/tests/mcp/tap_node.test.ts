@@ -227,6 +227,55 @@ describe("android_debug_tap_node", () => {
     expect(vi.mocked(inputTap)).not.toHaveBeenCalled();
   });
 
+  it("never persists runtime text / contentDesc / hint / state booleans into events.jsonl (v2-F Phase 0 privacy sealant)", async () => {
+    // The dumped UI carries v2-F parser-extracted fields that the agent might
+    // misuse — `tap_node` MUST drop them at serialization. Use distinctive
+    // literals so a positive grep proves leakage, not coincidence.
+    const SECRET_TEXT = "ULTRA_SECRET_TEXT_X9Q";
+    const SECRET_CD = "PRIVATE_CONTENT_DESC_X9Q";
+    const SECRET_HINT = "PRIVATE_HINT_X9Q";
+    const xmlWithLeakBait = `<hierarchy><node class="android.widget.FrameLayout" package="com.example.tapnode" bounds="[0,0][1000,2000]"><node class="android.widget.EditText" package="com.example.tapnode" resource-id="com.example.tapnode:id/sensitive_field" clickable="true" focused="true" checkable="true" checked="true" selected="true" text="${SECRET_TEXT}" content-desc="${SECRET_CD}" hint="${SECRET_HINT}" bounds="[100,100][300,200]" /></node></hierarchy>`;
+
+    const h = await harness();
+    const { runId, runDir } = await startRun(h);
+    vi.mocked(captureUiDump).mockResolvedValue({ ok: true, xml: xmlWithLeakBait, detail: "ok" });
+
+    const r = await h.client.callTool({
+      name: "android_debug_tap_node",
+      arguments: { runId, x: 200, y: 150 },
+    });
+    expect(r.isError).toBeFalsy();
+
+    const sc = structured(r);
+    const serializedKeys = [
+      "text",
+      "contentDesc",
+      "hint",
+      "checkable",
+      "checked",
+      "focused",
+      "selected",
+    ];
+    for (const key of serializedKeys) {
+      expect(sc.tappedNode as Record<string, unknown>).not.toHaveProperty(key);
+      expect(sc.anchorNode as Record<string, unknown>).not.toHaveProperty(key);
+      for (const a of sc.ancestorChain as Record<string, unknown>[]) {
+        expect(a).not.toHaveProperty(key);
+      }
+    }
+
+    const eventsRaw = readFileSync(join(runDir, "events.jsonl"), "utf8");
+    expect(eventsRaw).not.toContain(SECRET_TEXT);
+    expect(eventsRaw).not.toContain(SECRET_CD);
+    expect(eventsRaw).not.toContain(SECRET_HINT);
+    // structural double-check: no key surfaces inside the persisted event
+    for (const line of eventsRaw.trim().split("\n")) {
+      for (const key of serializedKeys) {
+        expect(line).not.toContain(`"${key}"`);
+      }
+    }
+  });
+
   it("writes no tap_node event when the tap itself fails — the event implies the tap happened", async () => {
     const h = await harness();
     const { runId, runDir } = await startRun(h);

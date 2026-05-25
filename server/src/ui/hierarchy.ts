@@ -9,9 +9,11 @@
  * scanner tracks quote state so a `>` inside an attribute value never ends a
  * tag early.
  *
- * `text` / `content-desc` are deliberately NOT extracted: v2-A keeps node
- * identity privacy-light (design lock Q4/Q6) — runtime text is translated user
- * content and resource-id mapping never needs it.
+ * Privacy boundary: this parser extracts `text` / `content-desc` / `hint` for
+ * v2-F element-driven interaction (`list_elements` consumes them), but the
+ * v2-A `tap_node` tool MUST NOT persist those fields into events.jsonl
+ * (design lock Q4/Q6 — runtime text is translated user content). The sealant
+ * lives in `tap_node`'s `serializeNode`, not here.
  */
 
 export interface UiBounds {
@@ -34,6 +36,16 @@ export interface UiNode {
   readonly index: number | null;
   readonly clickable: boolean;
   readonly focusable: boolean;
+  /** Runtime view text. `null` when the attribute is absent or empty. */
+  readonly text: string | null;
+  /** Accessibility `content-desc`. `null` when absent or empty. */
+  readonly contentDesc: string | null;
+  /** EditText placeholder hint. `null` when absent or empty. */
+  readonly hint: string | null;
+  readonly checkable: boolean;
+  readonly checked: boolean;
+  readonly focused: boolean;
+  readonly selected: boolean;
   /** Child nodes, document order. */
   readonly children: readonly UiNode[];
 }
@@ -54,6 +66,13 @@ interface MutableNode {
   index: number | null;
   clickable: boolean;
   focusable: boolean;
+  text: string | null;
+  contentDesc: string | null;
+  hint: string | null;
+  checkable: boolean;
+  checked: boolean;
+  focused: boolean;
+  selected: boolean;
   children: MutableNode[];
 }
 
@@ -155,8 +174,22 @@ function buildNode(body: string): MutableNode {
     index: parseIndex(attrs.get("index")),
     clickable: attrs.get("clickable") === "true",
     focusable: attrs.get("focusable") === "true",
+    text: emptyToNull(attrs.get("text")),
+    contentDesc: emptyToNull(attrs.get("content-desc")),
+    hint: emptyToNull(attrs.get("hint")),
+    checkable: attrs.get("checkable") === "true",
+    checked: attrs.get("checked") === "true",
+    focused: attrs.get("focused") === "true",
+    selected: attrs.get("selected") === "true",
     children: [],
   };
+}
+
+/** Empty or missing string attribute → `null`; uiautomator emits `text=""` for
+ * "no text" rather than omitting the attribute, and `null` makes the absence
+ * semantic across both shapes. */
+function emptyToNull(raw: string | undefined): string | null {
+  return raw === undefined || raw === "" ? null : raw;
 }
 
 /** Parse `[l,t][r,b]`. Returns `null` for an absent or malformed value — a

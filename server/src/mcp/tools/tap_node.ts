@@ -32,7 +32,14 @@ const boundsSchema = z
   })
   .strict();
 
-/** Privacy-light node identity — no `text` / `content-desc` (design lock Q4/Q6). */
+/**
+ * Privacy-light node identity (design lock Q4/Q6). As of v2-F the parser
+ * additionally extracts `text` / `content-desc` / `hint` / `checkable` /
+ * `checked` / `focused` / `selected` for `list_elements`, but `tap_node`
+ * events.jsonl MUST NOT carry runtime user-facing text. The schema is
+ * `.strict()` so adding a field above would fail validation — keep it that
+ * way and project via `serializeNode` below, never spread a `UiNode`.
+ */
 const nodeSchema = z
   .object({
     resourceId: z.string().nullable(),
@@ -77,7 +84,13 @@ const description = [
   "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `ui_dump_failed` when the pre-tap `uiautomator dump` fails or is unparseable (the tap is NOT performed); `invalid_argument` when the coordinate is outside the captured UI (the tap is NOT performed); `adb_not_found` when the adb binary is missing; `adb_command_failed` when an adb command fails.",
 ].join("\n");
 
-/** Project a parsed `UiNode` to the event shape — drops `children`. */
+/**
+ * Project a parsed `UiNode` to the event shape — drops `children` AND every
+ * v2-F parser-extracted field (`text`, `contentDesc`, `hint`, `checkable`,
+ * `checked`, `focused`, `selected`). This explicit field list is the v2-A
+ * privacy sealant; do not collapse to spread / pick — adding a new `UiNode`
+ * field should NOT silently surface in tap_node events.
+ */
 function serializeNode(node: UiNode): SerializedNode {
   return {
     resourceId: node.resourceId,
