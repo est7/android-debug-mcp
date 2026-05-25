@@ -33,6 +33,8 @@ const outputSchema = z
         apiLevel: z.number().int().nullable(),
         abi: z.string().nullable(),
         buildFingerprint: z.string().nullable(),
+        // v2-G additive (Q5+); see store/metadata.ts.
+        timezone: z.string().nullable(),
       })
       .strict(),
     git: z.object({ sha: z.string().nullable(), dirty: z.boolean().nullable() }).strict(),

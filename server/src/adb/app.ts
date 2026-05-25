@@ -34,6 +34,10 @@ export interface DeviceProps {
   readonly apiLevel: number | null;
   readonly abi: string | null;
   readonly buildFingerprint: string | null;
+  /** Device local timezone id (e.g. `Asia/Shanghai`); null when the device
+   * lacks the prop. Used by v2-G evidence adapters to map filename-date
+   * (in device local time) back to tsMs ranges. */
+  readonly timezone: string | null;
 }
 
 function userArgs(userId: number): string[] {
@@ -140,11 +144,12 @@ export async function getExitInfo(
 
 /** Collect device props for `metadata.device`. */
 export async function getDeviceProps(deviceSerial: string): Promise<DeviceProps> {
-  const [model, sdk, abi, fingerprint] = await Promise.all([
+  const [model, sdk, abi, fingerprint, timezone] = await Promise.all([
     getProp(deviceSerial, "ro.product.model"),
     getProp(deviceSerial, "ro.build.version.sdk"),
     getProp(deviceSerial, "ro.product.cpu.abi"),
     getProp(deviceSerial, "ro.build.fingerprint"),
+    getProp(deviceSerial, "persist.sys.timezone"),
   ]);
   const apiLevel = sdk === null ? null : Number.parseInt(sdk, 10);
   return {
@@ -152,6 +157,7 @@ export async function getDeviceProps(deviceSerial: string): Promise<DeviceProps>
     apiLevel: apiLevel !== null && Number.isFinite(apiLevel) ? apiLevel : null,
     abi,
     buildFingerprint: fingerprint,
+    timezone,
   };
 }
 

@@ -45,6 +45,12 @@ export const TOOL_ERROR_CODES = {
   rg_not_found: "rg_not_found",
   search_timed_out: "search_timed_out",
   project_root_missing: "project_root_missing",
+  // v2-G profile loader (Q11c): surfaced by start_session when
+  // <projectRoot>/.android-debug-mcp/profile.json is broken or names an
+  // unknown built-in profile. Hard errors so the run is never materialized
+  // with a half-resolved adapter.
+  profile_malformed: "profile_malformed",
+  profile_unknown: "profile_unknown",
 } as const;
 
 export type ToolErrorCode = (typeof TOOL_ERROR_CODES)[keyof typeof TOOL_ERROR_CODES];

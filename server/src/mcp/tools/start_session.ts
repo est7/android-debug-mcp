@@ -11,6 +11,7 @@ import {
 import { listDevices } from "../../adb/devices.ts";
 import { getGitInfo } from "../../host/git.ts";
 import { DEFAULT_LOGCAT_BUFFER_SIZE } from "../../logcat/spawn.ts";
+import { type LoadedProfile, loadProfile } from "../../profile/loader.ts";
 import type { SessionManager } from "../../session/manager.ts";
 import { IdentityError, assertSafePackageName } from "../../store/identity.ts";
 import { resolveProjectRoot, resolveRunRoot } from "../../store/paths.ts";
@@ -55,7 +56,7 @@ const description = [
   "Use when: the agent is about to debug an app and needs a `runId` to anchor every subsequent tool call.",
   'Args: `packageName` (required); optional `deviceSerial` (auto-picks the sole connected device when omitted), `userId` (number or "current", default "current"), `projectRoot` (for run-root resolution + git provenance), `clearLocalRunLogs`, `clearDeviceLogcat`, `launchOnStart`, `logcatBufferSize`.',
   "Returns: `{runId, runDir, runRoot, runRootSource, deviceSerial, userId, packageName, pid, launchDetail, versionName, versionCode, clearedRunCount}`. `pid` is null when the app was not launched or the launch failed (the run still starts).",
-  "Errors: `no_device` / `ambiguous_device` / `device_disconnected` for device resolution; `singleton_violation` when this (device,user,package) tuple already has an active session; `invalid_identity` for a malformed packageName; `adb_not_found` / `adb_command_failed` when the adb binary is missing or an adb command fails.",
+  "Errors: `no_device` / `ambiguous_device` / `device_disconnected` for device resolution; `singleton_violation` when this (device,user,package) tuple already has an active session; `invalid_identity` for a malformed packageName; `profile_malformed` when `<projectRoot>/.android-debug-mcp/profile.json` exists but is not valid JSON / fails schema; `profile_unknown` when profile.json names a profile not in the built-in registry; `adb_not_found` / `adb_command_failed` when the adb binary is missing or an adb command fails.",
 ].join("\n");
 
 export function registerStartSession(server: McpServer, manager: SessionManager): void {
@@ -91,6 +92,14 @@ export function registerStartSession(server: McpServer, manager: SessionManager)
       // `project_root_missing`, not a silent wrong-root mapping.
       const projectRoot = resolveProjectRoot(rootArg);
 
+      // v2-G Phase 1 (Q2/Q10/Q11c): resolve the project profile BEFORE the
+      // session is registered. A broken profile.json must fail before run
+      // materialization — `profile_malformed` / `profile_unknown` are typed
+      // hard errors that abort start_session with no on-disk side effect.
+      // A missing file is the vanilla case → loadedProfile is null and the
+      // session continues with `metadata.profile = null`.
+      const loadedProfile: LoadedProfile | null = await loadProfile(projectRoot);
+
       let clearedRunCount = 0;
       if (input.clearLocalRunLogs === true) {
         clearedRunCount = (await clearClosedRuns(runRoot, input.packageName)).length;
@@ -122,8 +131,10 @@ export function registerStartSession(server: McpServer, manager: SessionManager)
             apiLevel: deviceProps.apiLevel,
             abi: deviceProps.abi,
             buildFingerprint: deviceProps.buildFingerprint,
+            timezone: deviceProps.timezone,
           },
           git: { sha: git.sha, dirty: git.dirty },
+          profile: loadedProfile === null ? null : loadedProfile.json,
           logcatBuffer: {
             ...current.logcatBuffer,
             requested: input.logcatBufferSize ?? null,

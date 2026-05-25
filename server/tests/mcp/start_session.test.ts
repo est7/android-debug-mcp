@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -30,6 +30,7 @@ vi.mock("../../src/adb/app.ts", () => ({
     apiLevel: 33,
     abi: "arm64-v8a",
     buildFingerprint: "fp",
+    timezone: "Asia/Shanghai",
   }),
   getAppPids: async () => [],
   getAppUid: async () => "10100",
@@ -228,6 +229,17 @@ describe("start_session tool — projectRoot persistence (Phase 2.0)", () => {
     }
   });
 
+  it("persists device.timezone from getDeviceProps (v2-G Q5+)", async () => {
+    const h = await harness();
+    const result = await h.client.callTool({
+      name: "android_debug_start_session",
+      arguments: { packageName: "com.example.app" },
+    });
+    expect(result.isError).toBeFalsy();
+    const meta = await readMetadata(onlyActive(h.manager).runDir);
+    expect(meta.device.timezone).toBe("Asia/Shanghai");
+  });
+
   it("persists projectRoot:null when the resolved source root is not a git checkout", async () => {
     // An explicit projectRoot that is not a git repo: `resolveProjectRoot`
     // normalizes through `git rev-parse --show-toplevel`, which fails, so it
@@ -247,6 +259,86 @@ describe("start_session tool — projectRoot persistence (Phase 2.0)", () => {
       expect(meta.projectRoot).toBeNull();
     } finally {
       rmSync(nonGit, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("start_session tool — profile loading (v2-G Phase 1)", () => {
+  function writeProfile(projectRoot: string, content: string): void {
+    mkdirSync(join(projectRoot, ".android-debug-mcp"), { recursive: true });
+    writeFileSync(join(projectRoot, ".android-debug-mcp", "profile.json"), content);
+  }
+
+  it("metadata.profile stays null when projectRoot has no profile.json (vanilla)", async () => {
+    const repo = makeGitRepo();
+    try {
+      const h = await harness();
+      const result = await h.client.callTool({
+        name: "android_debug_start_session",
+        arguments: { packageName: "com.example.app", projectRoot: repo.dir },
+      });
+      expect(result.isError).toBeFalsy();
+      const meta = await readMetadata(onlyActive(h.manager).runDir);
+      expect(meta.profile).toBeNull();
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("loads `poppo-vone` profile and persists metadata.profile from profile.json", async () => {
+    const repo = makeGitRepo();
+    writeProfile(repo.topLevel, JSON.stringify({ name: "poppo-vone", version: 1 }));
+    try {
+      const h = await harness();
+      const result = await h.client.callTool({
+        name: "android_debug_start_session",
+        arguments: { packageName: "com.example.app", projectRoot: repo.dir },
+      });
+      expect(result.isError).toBeFalsy();
+      const meta = await readMetadata(onlyActive(h.manager).runDir);
+      expect(meta.profile).toEqual({ name: "poppo-vone", version: 1 });
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns profile_malformed when profile.json is not valid JSON; session is NOT created", async () => {
+    const repo = makeGitRepo();
+    writeProfile(repo.topLevel, "{ not valid json");
+    try {
+      const h = await harness();
+      const result = await h.client.callTool({
+        name: "android_debug_start_session",
+        arguments: { packageName: "com.example.app", projectRoot: repo.dir },
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(callText(result)).error).toBe("profile_malformed");
+      // No session registered — start_session aborts BEFORE the run folder
+      // is materialized when profile loading fails.
+      expect(h.manager.listActive()).toHaveLength(0);
+      expect(h.manager.registeredCount()).toBe(0);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns profile_unknown when profile.json names a profile not in the built-in registry", async () => {
+    const repo = makeGitRepo();
+    writeProfile(repo.topLevel, JSON.stringify({ name: "future-app", version: 1 }));
+    try {
+      const h = await harness();
+      const result = await h.client.callTool({
+        name: "android_debug_start_session",
+        arguments: { packageName: "com.example.app", projectRoot: repo.dir },
+      });
+      expect(result.isError).toBe(true);
+      const payload = JSON.parse(callText(result));
+      expect(payload.error).toBe("profile_unknown");
+      expect(payload.name).toBe("future-app");
+      expect(payload.known).toEqual(expect.arrayContaining(["poppo-vone"]));
+      expect(h.manager.listActive()).toHaveLength(0);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
     }
   });
 });

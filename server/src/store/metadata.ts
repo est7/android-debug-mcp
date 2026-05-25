@@ -48,9 +48,19 @@ export const MetadataSchema = z
         apiLevel: z.number().int().nullable().default(null),
         abi: z.string().nullable().default(null),
         buildFingerprint: z.string().nullable().default(null),
+        // v2-G additive (Q5+): captured at start_session so an HTTP-log adapter
+        // can map filename-date (in device local time) → tsMs ranges. Read
+        // once and frozen — a mid-session tz change does not refresh.
+        timezone: z.string().nullable().default(null),
       })
       .strict()
-      .default({ model: null, apiLevel: null, abi: null, buildFingerprint: null }),
+      .default({
+        model: null,
+        apiLevel: null,
+        abi: null,
+        buildFingerprint: null,
+        timezone: null,
+      }),
     git: z
       .object({
         sha: z.string().nullable().default(null),
@@ -67,6 +77,15 @@ export const MetadataSchema = z
       })
       .strict()
       .default({ requested: null, effective: null, buffers: [], error: null }),
+    // v2-G additive (Q10): the selected project profile, or null in a vanilla
+    // session with no `<projectRoot>/.android-debug-mcp/profile.json`. The
+    // shape is the verbatim profile.json content (Phase 1: name + version
+    // schema = 1). Pre-v2-G runs on disk → `null` via `.default(null)`.
+    profile: z
+      .object({ name: z.string().min(1).max(64), version: z.literal(1) })
+      .strict()
+      .nullable()
+      .default(null),
     exitCode: z.number().int().nullable().default(null),
     signalCode: z.string().nullable().default(null),
     killed: z.boolean().nullable().default(null),
