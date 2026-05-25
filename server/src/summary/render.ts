@@ -89,6 +89,12 @@ function describeEvent(e: Record<string, unknown>): string {
       const anchor = anchorResourceId(e.anchorNode);
       return `tap_node (${asNumber(e.x)}, ${asNumber(e.y)})${anchor ? ` → ${anchor}` : ""}${label ? ` — ${label}` : ""}`;
     }
+    case "list_elements": {
+      const label = asString(e.label);
+      const ec = asNumber(e.elementCount);
+      const wc = asNumber(e.windowCount);
+      return `list_elements — ${ec} element${ec === "1" ? "" : "s"} across ${wc} window${wc === "1" ? "" : "s"}${label ? ` — ${label}` : ""}`;
+    }
     case "source_mapping": {
       const anchor = anchorResourceId(e.anchorNode) ?? "(no anchor)";
       const conf = asString(e.confidence) ?? "?";

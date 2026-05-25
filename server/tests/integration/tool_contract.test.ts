@@ -45,11 +45,41 @@ function errorOf(result: unknown): string {
 }
 
 describe("v1 tool inventory", () => {
-  it("registers exactly the 19 tools of ANDROID_DEBUG_TOOL_NAMES", async () => {
+  it("registers exactly the 20 tools of ANDROID_DEBUG_TOOL_NAMES", async () => {
     const client = await harness();
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(19);
+    expect(tools).toHaveLength(20);
     expect(new Set(tools.map((t) => t.name))).toEqual(new Set(ANDROID_DEBUG_TOOL_NAMES));
+  });
+
+  // v2-F design lock Q4 — `list_elements` description MUST tell the agent
+  // "Do not cache this result"; the contract grep ensures the wording never
+  // drifts out of the description.
+  it("the v2-F list_elements tool description carries the `Do not cache` instruction", async () => {
+    const client = await harness();
+    const { tools } = await client.listTools();
+    const t = tools.find((x) => x.name === "android_debug_list_elements");
+    expect(t).toBeDefined();
+    expect(t?.description ?? "").toContain("Do not cache");
+  });
+
+  // Evidence-materializing tools mutate run state (artifact files, events
+  // jsonl, command jsonl) and idle-timer. MCP annotation `readOnlyHint` is
+  // a public contract — declaring `true` on these would mislead clients
+  // about side effects. Pinned per-tool to catch future drift (Phase 1 audit).
+  it("evidence-materializing tools declare readOnlyHint:false", async () => {
+    const client = await harness();
+    const { tools } = await client.listTools();
+    const evidenceTools = new Set([
+      "android_debug_capture",
+      "android_debug_tap_node",
+      "android_debug_list_elements",
+    ]);
+    const seen = tools.filter((t) => evidenceTools.has(t.name));
+    expect(seen.length).toBe(evidenceTools.size);
+    for (const t of seen) {
+      expect(t.annotations?.readOnlyHint).toBe(false);
+    }
   });
 
   it("every registered tool carries a description and the four annotation hints", async () => {
@@ -105,6 +135,7 @@ const ADB_TOUCHING_TOOLS = new Set([
   "android_debug_swipe",
   "android_debug_capture",
   "android_debug_tap_node",
+  "android_debug_list_elements",
 ]);
 
 // Every session/run-scoped tool resolves its runId BEFORE any adb call, so an
@@ -119,6 +150,7 @@ const BAD_RUNID_CASES: Array<[string, Record<string, unknown>, string]> = [
   ["android_debug_get_app_state", {}, "no_active_session"],
   ["android_debug_tap", { x: 1, y: 1 }, "no_active_session"],
   ["android_debug_tap_node", { x: 1, y: 1 }, "no_active_session"],
+  ["android_debug_list_elements", {}, "no_active_session"],
   ["android_debug_input_text", { text: "x" }, "no_active_session"],
   ["android_debug_send_key", { key: "BACK" }, "no_active_session"],
   ["android_debug_swipe", { x1: 1, y1: 1, x2: 2, y2: 2 }, "no_active_session"],

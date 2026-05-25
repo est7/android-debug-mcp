@@ -122,8 +122,8 @@ describe("registerDebugTool", () => {
     for (const name of ANDROID_DEBUG_TOOL_NAMES) {
       expect(name.startsWith("android_debug_")).toBe(true);
     }
-    // 19 tools — v1's 17 (§ G-Final) plus v2-A `tap_node` + `map_ui_node_to_source`.
-    expect(ANDROID_DEBUG_TOOL_NAMES).toHaveLength(19);
+    // 20 tools — v1's 17 (§ G-Final), v2-A `tap_node` + `map_ui_node_to_source`, v2-F `list_elements`.
+    expect(ANDROID_DEBUG_TOOL_NAMES).toHaveLength(20);
     expect(new Set(ANDROID_DEBUG_TOOL_NAMES).size).toBe(ANDROID_DEBUG_TOOL_NAMES.length);
   });
 });
