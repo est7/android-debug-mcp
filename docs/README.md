@@ -14,9 +14,9 @@
 | [`v2/source-mapping.md`](./v2/source-mapping.md) | v2-A 设计 lock(tap-to-source;grill Q1–Q10 + codex 复审) | locked 2026-05-21 · § 验收 定稿 2026-05-25 |
 | [`v2/v2-a-implementation-plan.md`](./v2/v2-a-implementation-plan.md) | v2-A 实施计划(6 phase + 并行 + 风险 + open decisions) | locked 2026-05-21 |
 | [`v2/test-plan-v2a.md`](./v2/test-plan-v2a.md) | v2-A 5 scenario 真机 manual checklist + evidence ledger | Phase 5 落盘 |
-| [`v2/element-interaction.md`](./v2/element-interaction.md) | v2-F 设计 lock(element-driven interaction;Route B list + coord,采 mobile-mcp 形态;codex 2 轮复审 sign-off) | locked 2026-05-25 · § 验收 定稿 2026-05-25 |
+| [`v2/element-interaction.md`](./v2/element-interaction.md) | v2-F 设计 lock(element-driven interaction;Route B list + coord,采 mobile-mcp 形态;codex 2 轮复审 sign-off)+ § Amendments(2 条:Scenario C 真机未观察 + Q12 wire-shape 澄清) | locked 2026-05-25 · § 验收 定稿 2026-05-25 · 2 amendments 2026-05-25 |
 | [`v2/v2-f-implementation-plan.md`](./v2/v2-f-implementation-plan.md) | v2-F 实施计划(4 phase + 并行 + 风险 + 8 open decisions;codex 3 轮评审 sign-off) | locked 2026-05-25 |
-| [`v2/test-plan-v2f.md`](./v2/test-plan-v2f.md) | v2-F 6 scenario 真机 manual checklist + evidence ledger(含 scenario C multi-window 三件齐 退化分支) | Phase 3 进行中 |
+| [`v2/test-plan-v2f.md`](./v2/test-plan-v2f.md) | v2-F 6 scenario 真机 manual checklist + evidence ledger(含 scenario C multi-window 三件齐 退化分支) | Phase 3 落盘 2026-05-25 |
 | `architecture.md` | 系统架构图、session 生命周期、数据流 | v1.1(未建立) |
 | [`test-plan.md`](./test-plan.md) | 5 scenario 真机 manual checklist | Phase 11 落盘 |
 | [`audits/`](./audits/) | 各阶段 codex audit 报告原文(phase-1 … phase-N) | living |

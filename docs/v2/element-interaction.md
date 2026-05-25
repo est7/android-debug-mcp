@@ -353,3 +353,94 @@ remaining design objection to Route B or the six round-1 fixes",2 项:
 
 同 v1 / v2-A:本文件 lock 后不就地改。v2-F 实施中若某决策需翻案,新增 amendments 段
 记录原决策、新决策、触发原因、影响范围,并同步 [`../README.md`](../README.md) 索引。
+
+## Amendments
+
+### 2026-05-25 · Scenario C real-multi-window 真机未观察(算法保留,合成兜底)
+
+**原决策**(§ Q6 + § 验收 C):`list_elements` 对 `<hierarchy>` 多 root 反向 iterate,
+`windowIndex=0` 锁 z-order 最顶;Scenario C 在 Poppo 分享 dialog / AlertDialog /
+PopupWindow / 系统 dialog 状态下,**真机** 必须观察到 ≥2 `windowIndex`,且顶层 root
+bounds 之外的主屏 element 在 list 内、`windowIndex >= 1` + bounds 完整 —— 证明
+非全屏 top root 可穿透。
+
+**新决策**(amendment,非翻案):算法 + 合成 fixture 覆盖保留不变,**真机
+multi-window 观察推后续 phase / 真出现场景**。Scenario C 在 v2-F.0 阶段以三件齐
+退化形式收尾,manual checklist 中 Branch 退化 已 marked。
+
+**触发原因**(2026-05-25 真机 acceptance 期):
+
+- 在 POCO F3 + MIUI 13 上触发 MIUI **system permission dialog**
+  (`com.lbe.security.miui` "是否允许"Poppo"使用麦克风进行录音"),uiautomator
+  dump 返回 `<hierarchy>` direct `<node>` 子节点数 = 1,且 dump 内全部节点
+  `package=com.lbe.security.miui` —— Poppo (`com.baitu.poppo`) 完全不在 dump 内。
+  系统 dialog 在独立进程,uiautomator 在该设备 / 该 ROM 上对 foreground accessibility
+  window 的 traversal 只返回当前激活窗口。
+- 同一 device 上 Poppo 内 BottomSheet 形态 *设计上* 即单 root(BottomSheet 挂在
+  host Activity 的 ContentView 上,非独立 root),lock § Phase 3 风险 #3 已预言。
+- AlertDialog / PopupWindow 也是 Poppo 同进程 Activity 上 Dialog window,uiautomator
+  实测同样单 root(同进程 dialog 通常通过 Dialog window token 挂上层,但 dump
+  walker 拿到的是 active window tree)。
+
+**算法正确性 evidence**(不依赖真机):
+- `server/tests/ui/list_elements.test.ts:74` *"emits windowIndex=0 for the
+  document-order LAST root"* —— inline 合成 two-root XML,断言反向 iterate
+  + `windowIndex = roots.length - 1 - i` 公式。
+- `server/tests/ui/list_elements.test.ts:91` *"walks each window's tree in DFS
+  post-order"* —— inline 合成 XML 锁同窗口内的遍历顺序。
+- `server/src/ui/list_elements.ts:42-50` `collectElements` 实现与 lock §
+  Q6 / § element 收集 recipe 字面一致。
+
+**影响范围**:
+
+- v2-F.0 acceptance Scenario C 在 manual checklist 内以 退化 三件齐 收尾,
+  evidence ledger 见 [`./test-plan-v2f.md`](./test-plan-v2f.md) § Scenario C。
+- 不需要新增 `poppo-multi-window.xml` 真机 fixture。算法层契约由合成 fixture
+  + 上述两条 vitest case 钉死。
+- 若后续真机出现 ≥2 root 的 dump(其他 ROM / 其他 dialog 形态 / 其他 app),
+  补 fixture + `list_elements.test.ts` 真机 case;届时无需修订本 lock 或本
+  amendment —— 本 amendment 只声明 v2-F.0 阶段未观察,不否决未来的观察。
+- 不算 design 翻案 —— 锁 Q6 行为不变,锁 § 验收 C 判据不变;只是真机阶段
+  退化为 算法 + 合成 + ledger 三件齐 形态。
+
+### 2026-05-25 · Q12 / § 失败语义 zod-rejection wire shape clarification
+
+**原描述**(Q12 + § 失败语义 表 row 4 + § 设计复审决策 round 1 Non-blocking 6):
+描述 zod 输入校验失败时,MCP SDK 返回 `{isError:true, content:[{type:"text",
+text:"<zod error>"}]}`,引述 `server/tests/mcp/interaction.test.ts:229-240` 作为
+依据。
+
+**真机观察**(2026-05-25 Phase 3 acceptance Scenario E-b):
+
+- 通过 vitest `InMemoryTransport` 的 unit test 套调 `client.callTool` —— 服务器
+  zod 拒绝后,SDK client 端 **的确** 返回 `{isError:true, content:[text]}` tool result
+  envelope。
+- 通过 Claude Code 的真机 stdio MCP client 直连 server,同一拒绝在 wire 上以
+  JSON-RPC **`-32602 INVALID_PARAMS`** 错误响应返回 —— client SDK 把它当 RPC error
+  throw / 上抛,而非 `{isError:true}` tool result。
+
+**结论**(documentation correctness,非 design 翻案):上述两种 wire shape **都
+spec-compliant**:JSON-RPC error response 是 MCP / JSON-RPC 规范的标准形态,
+`{isError:true}` 是 InMemoryTransport-backed SDK client 的 recovery 形态。
+Q12 / § 失败语义 写的 `{isError:true}` 形态实际上是 *InMemoryTransport
+特定* 的,生产 stdio transport 会暴露 `-32602` 形态。
+
+**真正的契约**(下面 4 条在两种 wire shape 上都成立,Phase 3 真机已 verify):
+
+1. 拒绝发生在 handler 运行之前;
+2. 没有副作用(events.jsonl / commands.jsonl 不增,无 adb 调用);
+3. zod 字面 message 原文回到 client;
+4. **不进** typed error catalog(没有 `error: "..."` JSON 域错码)。
+
+**影响范围**:
+
+- Q12 + § 失败语义 表 row 4 + § 设计复审决策 round 1 Non-blocking 6 的措辞继续
+  保留(不就地改),本 amendment 加 transport 维度澄清。
+- 现有 vitest case(`long_press.test.ts:154/167` + `interaction.test.ts:229-240`)
+  断言形态保持不变(它们走 InMemoryTransport 是对的);不补充 stdio-shape
+  case —— 真机 stdio 的 `-32602` 行为是 SDK 给的,不是我们 server 代码控制
+  的,断言它等于把 SDK 的实现细节锁死。
+- 文档 / agent-side onboarding 应在 README / agent 提示里把 "zod 拒绝两种
+  wire shape" 写清楚 —— 推后 README 维护周期处理,本 amendment 不补 README。
+- 不算 design 翻案 —— 锁 Q12 行为(rejection-before-handler / 不进 typed
+  catalog)不变;只是真机阶段补足 transport 维度的 wire shape 描述。
