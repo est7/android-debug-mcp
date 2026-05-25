@@ -249,7 +249,12 @@ Route A 的概念,Route B 下 element 选择由 agent 做,server 不二判。
 | 失败模型 | actionable error 一律 string message | 硬错 + typed code(`ui_dump_failed` 等) | 与 v1 / v2-A error catalog 体例对齐 |
 | double_tap / drag-from-to / direction-swipe | 各自 tool | **不做**(推 v2-F.1) | KISS,先看真实用量 |
 
-## 验收 scenario(草案,实施计划阶段定稿)
+## 验收 scenario(定稿 2026-05-25)
+
+实施期(Phase 0–2)未触发翻案,6 条 scenario 保持锁定形态。Phase 3 manual
+checklist + evidence ledger 见 [`./test-plan-v2f.md`](./test-plan-v2f.md);
+该 plan 是 *如何* 在真机上证明每条 scenario,本表是 *什么* 必须被证明。
+
 
 | 编号 | 场景 | 通过判据(草案) |
 |---|---|---|
