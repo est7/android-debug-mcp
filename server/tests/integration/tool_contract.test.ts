@@ -45,10 +45,10 @@ function errorOf(result: unknown): string {
 }
 
 describe("v1 tool inventory", () => {
-  it("registers exactly the 20 tools of ANDROID_DEBUG_TOOL_NAMES", async () => {
+  it("registers exactly the 21 tools of ANDROID_DEBUG_TOOL_NAMES", async () => {
     const client = await harness();
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(20);
+    expect(tools).toHaveLength(21);
     expect(new Set(tools.map((t) => t.name))).toEqual(new Set(ANDROID_DEBUG_TOOL_NAMES));
   });
 
@@ -136,6 +136,7 @@ const ADB_TOUCHING_TOOLS = new Set([
   "android_debug_capture",
   "android_debug_tap_node",
   "android_debug_list_elements",
+  "android_debug_long_press",
 ]);
 
 // Every session/run-scoped tool resolves its runId BEFORE any adb call, so an
@@ -151,6 +152,7 @@ const BAD_RUNID_CASES: Array<[string, Record<string, unknown>, string]> = [
   ["android_debug_tap", { x: 1, y: 1 }, "no_active_session"],
   ["android_debug_tap_node", { x: 1, y: 1 }, "no_active_session"],
   ["android_debug_list_elements", {}, "no_active_session"],
+  ["android_debug_long_press", { x: 1, y: 1 }, "no_active_session"],
   ["android_debug_input_text", { text: "x" }, "no_active_session"],
   ["android_debug_send_key", { key: "BACK" }, "no_active_session"],
   ["android_debug_swipe", { x1: 1, y1: 1, x2: 2, y2: 2 }, "no_active_session"],

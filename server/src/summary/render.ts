@@ -82,6 +82,10 @@ function describeEvent(e: Record<string, unknown>): string {
       return `send_key ${asString(e.key) ?? "?"}`;
     case "swipe":
       return `swipe (${asNumber(e.x1)}, ${asNumber(e.y1)}) → (${asNumber(e.x2)}, ${asNumber(e.y2)})`;
+    case "long_press": {
+      const label = asString(e.label);
+      return `long_press (${asNumber(e.x)}, ${asNumber(e.y)}) ${asNumber(e.durationMs)}ms${label ? ` — ${label}` : ""}`;
+    }
     case "capture":
       return `capture ${Array.isArray(e.kinds) ? e.kinds.join("+") : "?"}`;
     case "tap_node": {

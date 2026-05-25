@@ -12,6 +12,7 @@ import { registerInputText } from "./mcp/tools/input_text.ts";
 import { registerListDevices } from "./mcp/tools/list_devices.ts";
 import { registerListElements } from "./mcp/tools/list_elements.ts";
 import { registerListRuns } from "./mcp/tools/list_runs.ts";
+import { registerLongPress } from "./mcp/tools/long_press.ts";
 import { registerMapUiNodeToSource } from "./mcp/tools/map_ui_node_to_source.ts";
 import { registerMarkEvent } from "./mcp/tools/mark_event.ts";
 import { registerSearchLogs } from "./mcp/tools/search_logs.ts";
@@ -28,7 +29,7 @@ import { resolveRunRoot } from "./store/paths.ts";
 import { VERSION } from "./version.ts";
 
 /** The registered tool inventory size — kept in sync with `ANDROID_DEBUG_TOOL_NAMES`. */
-const TOOL_COUNT = 20;
+const TOOL_COUNT = 21;
 
 /**
  * Build the server, register every tool, recover orphaned runs, and connect
@@ -81,6 +82,7 @@ export function registerAllTools(server: McpServer, manager: SessionManager): vo
   registerTapNode(server, manager);
   registerMapUiNodeToSource(server, manager);
   registerListElements(server, manager);
+  registerLongPress(server, manager);
   registerInputText(server, manager);
   registerSendKey(server, manager);
   registerSwipe(server, manager);
