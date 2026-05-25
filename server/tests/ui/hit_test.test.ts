@@ -162,3 +162,54 @@ describe("resolveTap — clickable scrim vs transparent overlay", () => {
     expect(r?.tappedNode.resourceId).toBe("p:id/main_btn");
   });
 });
+
+describe("resolveTap — RecyclerView row (Poppo follow list real device)", () => {
+  // Real Poppo 关注/粉丝列表 dump (POCO F3 / 951a20a2). The first row's avatar
+  // sits at [46,530][183,667]; (114, 598) is its center. The fixture protects
+  // scenario E's contract: a tap on a recycled row child surfaces an
+  // app-anchored tappedNode whose ancestor chain carries the RecyclerView —
+  // exactly what `confidence.ts`'s `recycled_row_id` signal keys on.
+  const roots = parseUiHierarchy(fixture("poppo-follow-list.xml"));
+
+  it("a tap on a row avatar resolves to that avatar as its own anchor", () => {
+    const r = resolveTap(roots, 114, 598, "com.baitu.poppo");
+    expect(r).not.toBeNull();
+    expect(r?.tappedNode.resourceId).toBe("com.baitu.poppo:id/avatar");
+    expect(r?.anchorSource).toBe("tapped_node");
+  });
+
+  it("the ancestor chain contains a RecyclerView, enabling recycled_row_id detection", () => {
+    const r = resolveTap(roots, 114, 598, "com.baitu.poppo");
+    expect(r?.ancestorChain.some((n) => n.class.includes("RecyclerView"))).toBe(true);
+  });
+});
+
+describe("resolveTap — share dialog overlay (Poppo real device)", () => {
+  // Real Poppo 分享 dialog dump (POCO F3 / 951a20a2). Poppo's BottomSheet
+  // attaches via the activity's ContentView rather than a separate window, so
+  // uiautomator only emits the dialog subtree — root bounds are
+  // [0,1399][1080,2320] (non-fullscreen). Inside, three nested RecyclerViews
+  // (`recyclerViewShare`, `recyclerViewChatPlatform`, `recyclerViewOperation`)
+  // exercise dense recycled-row content; (378, 1968) is the Facebook row's
+  // avatar in `recyclerViewChatPlatform`.
+  const roots = parseUiHierarchy(fixture("poppo-overlay.xml"));
+
+  it("a tap on a dialog row resolves to its app-anchored ivAvatar", () => {
+    const r = resolveTap(roots, 378, 1968, "com.baitu.poppo");
+    expect(r?.tappedNode.resourceId).toBe("com.baitu.poppo:id/ivAvatar");
+    expect(r?.anchorSource).toBe("tapped_node");
+  });
+
+  it("the ancestor chain pins the containing RecyclerView by id", () => {
+    const r = resolveTap(roots, 378, 1968, "com.baitu.poppo");
+    expect(
+      r?.ancestorChain.some((n) => n.resourceId === "com.baitu.poppo:id/recyclerViewChatPlatform"),
+    ).toBe(true);
+    expect(r?.ancestorChain.some((n) => n.class.includes("RecyclerView"))).toBe(true);
+  });
+
+  it("a tap above the non-fullscreen dialog returns null", () => {
+    // Dialog root starts at y=1399; (500, 700) is well above it.
+    expect(resolveTap(roots, 500, 700, "com.baitu.poppo")).toBeNull();
+  });
+});

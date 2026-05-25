@@ -188,29 +188,32 @@ codex 作为设计 reviewer 参与两轮,贡献已并入上方决策:
 codex 总结的三大设计风险:pre-tap vs post-tap 时序歧义、过度信任 framework /
 复用 id、翻译后运行时文本泄进事件身份 —— 三条均已在决策中处置。
 
-## 验收 scenario(草案,实施计划阶段定稿)
+## 验收 scenario(5 条)
 
-| 编号 | 场景 | 通过判据(草案) |
-|---|---|---|
-| A | tap-to-source happy path | tap 一个带 `resource-id` 的按钮 → `tap_node` 返回 `anchorNode` → `map` 返回 `high` + 正确 layout / handler 的 `file:line` |
-| B | 无锚点 | tap 一个无 id 节点 → `anchorNode:null` / `anchorSource:"none"`;`map` 返回 `confidence:"none"`,无误报候选 |
-| C | 歧义消解 | tap 一个 id 在多 layout 声明的元素 → 前台 Activity cross-check 选对 owner |
-| D | 失败语义 | pre-tap dump 失败 → 硬错 + 未点击;`rg` 缺失 → `rg_not_found` 硬错 |
-| E | RecyclerView 行 | tap 列表行子元素 → confidence 被 cap,`signals` 含 `recycled_row_id` |
+5 条 scenario 锁 v2-A 链 T + M 的**可信证据形状**,是 contract;具体运行步骤(导航、坐标、env)推到 [`test-plan-v2a.md`](./test-plan-v2a.md)。每行 4 列:
+
+- **invariant** — 这条 scenario 守的核心不变量。
+- **observable outputs** — `tap_node` / `map` 返回值必须命中的字段约束。
+- **required `signals[]`** — `map` 返回的 `signals[]` 必须包含的位(机读审计;`map` 硬错路径不返 signals)。
+- **candidate kind / error** — `map` 的 `candidates[]` 必须含有的 `kind` 集合,或对硬错 scenario 而言必须返回的 error code。
+
+| # | invariant | observable outputs | required `signals[]` | candidate kind / error |
+|---|---|---|---|---|
+| A | 带 app-package `resource-id` 的可点节点能映射到其 owner | `tap_node`:`anchorNode != null`、`anchorSource ∈ {tapped_node, ancestor}`<br>`map`:`confidence: "high"` | `resource_id_present`、`resource_package_matches_session`、`layout_declares_id`、`code_refs_found` | `id_declaration` + `screen_owner` + `code_ref` 至少各一条;命中的 `code_ref` 与 resolved `screen_owner` 同文件 |
+| B | 无 app-id 锚点 → 不映射、不误报 | `tap_node`:`anchorNode: null`、`anchorSource: "none"`<br>`map`:`confidence: "none"`、`candidates: []` | (空) | — |
+| C | id 多 layout 声明时,前台 Activity cross-check 消歧 | `map`:`confidence ∈ {high, medium}`;`signals[]` 不含 `owner_ambiguous` | `resource_id_present`、`resource_package_matches_session`、`layout_declares_id`、`layout_inflated_by_foreground_activity` | ≥2 条 `id_declaration` 候选;`screen_owner` 中恰好一条 simple class name 等于前台 Activity simple class name |
+| D | 失败语义硬错且无副作用 | sub-a(pre-tap dump fail):`tap_node` `{isError: true}` + run 内不写 `tap_node` 事件 + 不发 `input tap`<br>sub-b(`rg` 缺失):`map` `{isError: true}` + run 内不写 `source_mapping` 事件 | (硬错不返 signals) | sub-a:`ui_dump_failed`<br>sub-b:`rg_not_found` |
+| E | RecyclerView / ListView / GridView 行内 id 复用 cap confidence | `map`:`confidence: "low"`,`reason` 提示 recycled row | `recycled_row_id` + `resource_id_present` + `resource_package_matches_session` + `layout_declares_id` | ≥1 条 `id_declaration`;`recycled_row_id` 主导降级,与 `owner_ambiguous` 无关 |
 
 ## Open implementation decisions(实施时定形)
 
-1. `map` 输出 `candidates` 的 `kind` 分类(declaration / screen-owner / handler …)
-   与各自字段。
-2. `ancestorChain` 截断规则 —— 仅当真机 Poppo dump 出现病态深度才加
-   (`ancestorChainTruncated:true`,保留最近祖先);现在不预设。
-3. screen-owner recipe 的精确 pattern 集 —— 取决于 Poppo 用 ViewBinding /
-   `findViewById` / DataBinding / 废弃的 kotlin synthetics;实施时扫
-   `submodulepoppo/` 确认。
-4. ViewBinding 的 snake_case id → camelCase 字段名转换规则。
-5. error code 命名与 error-shape —— 对齐 v1 phase-10 的 error-shape 模块。
-6. `constants.ts` 的 `ANDROID_DEBUG_TOOL_NAMES` inventory 17 → 19;两个新 tool 注册。
-7. 验收 scenario 定稿(上表为草案)。
+1. ✓ **resolved (Phase 2.2)** — `map` 输出 `candidates` 的 `kind` 分类:`id_declaration` / `screen_owner` / `code_ref` / `generated_noise`,字段 `{file, line, kind, text}`(`server/src/source/candidate.ts`)。
+2. **still open** — `ancestorChain` 截断规则。真机 Poppo dump 至今未见病态深度,暂不实施(`ancestorChainTruncated:true` 字段未引入)。
+3. ✓ **resolved (Phase 2.1, commit `d0ebcaa`)** — Poppo 是 ViewBinding-only(无 `findViewById`、无 kotlin synthetics、DataBinding 声明未用);screen-owner recipe pattern 集见 [`v2-a-implementation-plan.md`](./v2-a-implementation-plan.md) § 2.1。
+4. ✓ **resolved (Phase 2.1)** — snake_case → lowerCamelCase 在 `server/src/source/recipe.ts`(`face_mask_top` → `faceMaskTop`,已是 camel 则保留)。
+5. ✓ **resolved (Phase 1 / 4)** — 硬错码进 `server/src/mcp/toolError.ts` typed catalog(`ui_dump_failed` / `rg_not_found` / `search_timed_out` / `project_root_missing`);每个 tool 的 `Errors:` 描述列全。
+6. ✓ **resolved (Phase 1 / 4)** — `bootstrap.ts` `TOOL_COUNT` 17 → 18 → 19;`ANDROID_DEBUG_TOOL_NAMES` 同步两个新 tool。
+7. ✓ **resolved (Phase 5)** — 验收 scenario 5 条定稿见 § 验收;运行步骤推 [`test-plan-v2a.md`](./test-plan-v2a.md)。
 
 ## 显式 out-of-scope(v2-A 不做)
 
