@@ -500,8 +500,12 @@ Result:                  bun run test → 547 / 547 passed at 25ea4c2
 
 ## After all six
 
-- [x] `bun run lint && bun run typecheck && bun run test` green at f9f4cc0
-      (547 / 547 passed; rerun at this real-device acceptance commit).
+- [x] `bun run lint && bun run typecheck && bun run test` green at `943d1cf`
+      (552 / 552 passed; codex final-audit round-2 verification commit —
+      this is the cadence-A 2nd-and-final sign-off point for v2-F.0).
+      Post-sweep follow-up commit `cdf6cb6` adds 1 surrogate-range test
+      (553 / 553) per the round-1 non-blocker; the gate sha above is the
+      audited point, the +1 test is the close-sweep delta.
 - [x] Each scenario has a filled-in evidence ledger (A–F above).
 - [x] Scenario C did NOT reproduce real multi-window on POCO F3 + MIUI 13
       + Poppo + uiautomator (MIUI system permission dialog dump = 1 root,
