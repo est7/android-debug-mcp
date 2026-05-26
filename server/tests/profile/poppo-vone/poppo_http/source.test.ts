@@ -186,3 +186,45 @@ describe("poppoHttpSource — id + querySchema discriminator", () => {
     expect(parsed.source).toBe("poppo_http");
   });
 });
+
+describe("poppoHttpSource — validateNarrowingFilter (v0.4.0 Block A)", () => {
+  // Calls a tiny wrapper so the test reads as "is this query narrowing?".
+  const isNarrowing = (q: Record<string, unknown>): string | null =>
+    poppoHttpSource.validateNarrowingFilter?.(q as EvidenceQuery) ?? null;
+
+  it("bare {source} → underspecified message naming every accepted filter", () => {
+    const msg = isNarrowing({ source: "poppo_http" });
+    expect(msg).not.toBeNull();
+    expect(msg).toContain("pathPrefix");
+    expect(msg).toContain("methodIn");
+    expect(msg).toContain("outcome");
+    expect(msg).toContain("tsMsRange");
+    expect(msg).toContain("hostContains");
+    expect(msg).toContain("durationMsGte");
+    expect(msg).toContain("errorTypeIn");
+    // Steers the agent toward extract_evidence_context for "around an event".
+    expect(msg).toContain("extract_evidence_context");
+  });
+
+  it("excludeHeartbeat alone is NOT narrowing (negative filter doesn't count)", () => {
+    expect(isNarrowing({ source: "poppo_http", excludeHeartbeat: true })).not.toBeNull();
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ["pathPrefix", { source: "poppo_http", pathPrefix: "/api" }],
+    ["methodIn", { source: "poppo_http", methodIn: ["GET"] }],
+    ["outcome", { source: "poppo_http", outcome: "http_error" }],
+    ["tsMsRange", { source: "poppo_http", tsMsRange: { from: 0 } }],
+    ["hostContains", { source: "poppo_http", hostContains: "api.v.show" }],
+    ["durationMsGte", { source: "poppo_http", durationMsGte: 1000 }],
+    ["errorTypeIn", { source: "poppo_http", errorTypeIn: ["java.io.IOException"] }],
+  ])("%s alone is narrowing → accepts", (_label, q) => {
+    expect(isNarrowing(q)).toBeNull();
+  });
+
+  it("a positive filter combined with excludeHeartbeat is still narrowing", () => {
+    expect(
+      isNarrowing({ source: "poppo_http", pathPrefix: "/api", excludeHeartbeat: true }),
+    ).toBeNull();
+  });
+});

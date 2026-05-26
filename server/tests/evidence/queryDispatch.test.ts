@@ -103,6 +103,42 @@ describe("dispatchQuery", () => {
     }
   });
 
+  it("source.validateNarrowingFilter rejection → malformed with query_underspecified", () => {
+    // v0.4.0 Block A: a source can demand at least one positive narrowing
+    // field. dispatchQuery calls validateNarrowingFilter AFTER schema parse,
+    // and a non-null return surfaces as `query_underspecified` (not the
+    // generic `query_malformed`) so agents can branch on "add a filter".
+    const narrowingSrc: EvidenceSource = {
+      ...fakeSrc,
+      validateNarrowingFilter(q: EvidenceQuery): string | null {
+        return (q as { pathPrefix?: string }).pathPrefix === undefined ? "needs pathPrefix" : null;
+      },
+    };
+    const narrowingProfile: Profile = {
+      name: "narrowing-profile",
+      evidenceSources: [narrowingSrc],
+    };
+    const tooLoose = dispatchQuery(narrowingProfile, { source: "fake_src" });
+    expect(tooLoose.kind).toBe("malformed");
+    if (tooLoose.kind === "malformed") {
+      expect(tooLoose.error.code).toBe("query_underspecified");
+      expect(tooLoose.error.extra).toMatchObject({ source: "fake_src" });
+      expect(tooLoose.error.message).toBe("needs pathPrefix");
+    }
+    // Same dispatcher call with the required narrowing field → ok.
+    const okWithFilter = dispatchQuery(narrowingProfile, {
+      source: "fake_src",
+      pathPrefix: "/api/v1",
+    });
+    expect(okWithFilter.kind).toBe("ok");
+  });
+
+  it("source without validateNarrowingFilter is unaffected (backward compat)", () => {
+    // fakeSrc has no validateNarrowingFilter — bare {source} still dispatches ok.
+    const r = dispatchQuery(profile, { source: "fake_src" });
+    expect(r.kind).toBe("ok");
+  });
+
   it("dispatch is pure: same input → same output, no side effects", () => {
     const q = { source: "fake_src", pathPrefix: "/p" };
     const a = dispatchQuery(profile, q);

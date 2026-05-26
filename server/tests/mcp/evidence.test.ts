@@ -202,12 +202,51 @@ describe("search_logs tool", () => {
     expect(entries.map((e) => e.rawLineNo)).toEqual([2]);
   });
 
+  it("rejects a no-filter call with query_underspecified (v0.4.0 Block A)", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    const r = await h.client.callTool({
+      name: "android_debug_search_logs",
+      // No query / level / sinceTs / before|afterMark / tags / cursor → the
+      // "no fetch-all" gate fires BEFORE we touch runDir or logcat.
+      arguments: { runId },
+    });
+    expect(r.isError).toBe(true);
+    const err = JSON.parse(callText(r));
+    expect(err.error).toBe("query_underspecified");
+    expect(err.message).toContain("at least one narrowing filter");
+  });
+
+  it("buffer alone is NOT narrowing (still rejected)", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    const r = await h.client.callTool({
+      name: "android_debug_search_logs",
+      arguments: { runId, buffer: "main" },
+    });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(callText(r)).error).toBe("query_underspecified");
+  });
+
+  it("excludeTags alone is NOT narrowing (still rejected)", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    const r = await h.client.callTool({
+      name: "android_debug_search_logs",
+      arguments: { runId, excludeTags: ["NoiseTag"] },
+    });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(callText(r)).error).toBe("query_underspecified");
+  });
+
   it("returns run_missing for an unknown runId", async () => {
     const h = await harness();
     await startRun(h);
     const r = await h.client.callTool({
       name: "android_debug_search_logs",
-      arguments: { runId: "no-such-run" },
+      // v0.4.0 Block A: include a narrowing filter so the call passes the
+      // "no fetch-all" gate; the runId resolution then trips run_missing.
+      arguments: { runId: "no-such-run", level: "I" },
     });
     expect(r.isError).toBe(true);
     expect(JSON.parse(callText(r)).error).toBe("run_missing");

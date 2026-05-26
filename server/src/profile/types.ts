@@ -183,6 +183,28 @@ export interface EvidenceSource {
   redactForBundle(record: ParsedRecord): ParsedRecord;
 
   /**
+   * OPTIONAL — v0.4.0 Block A (audit findings 2026-05-26).
+   *
+   * Enforce the "no fetch-all" contract: agents calling `search_evidence`
+   * MUST supply at least one filter field that actually narrows the result
+   * set. Sources whose datasets can legitimately be small (no fetch-all
+   * risk) leave this unset.
+   *
+   * Returning a string rejects the call with `query_underspecified`; the
+   * string IS the user-facing message (caller wraps it as a typed error).
+   * Returning `null` accepts the call.
+   *
+   * Time-windowed callers (`extract_evidence_context`) inject `tsMsRange`
+   * before dispatch, so the source MAY accept presence of `tsMsRange` as
+   * "narrowing enough" — `extract_*_context` calls remain frictionless.
+   *
+   * Convention: a negative-only filter (e.g. `excludeHeartbeat`) does NOT
+   * count as narrowing; it reduces the result set but allows any positive
+   * field to pour through.
+   */
+  validateNarrowingFilter?(query: EvidenceQuery): string | null;
+
+  /**
    * OPTIONAL — Phase 4 amendment (codex audit R1).
    *
    * Decorate the agent's query with session-bound defaults before

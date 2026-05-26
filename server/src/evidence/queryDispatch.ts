@@ -72,10 +72,25 @@ export function dispatchQuery(profile: Profile | null, query: LooseQuery): Query
     };
   }
 
+  // v0.4.0 Block A: "no fetch-all" contract. Sources may demand at least
+  // one narrowing filter; an empty / negative-only query rejects with a
+  // distinct error code so the agent knows to add a filter rather than
+  // re-check field shapes.
+  const parsedQuery = result.data as EvidenceQuery;
+  if (source.validateNarrowingFilter !== undefined) {
+    const narrowingError = source.validateNarrowingFilter(parsedQuery);
+    if (narrowingError !== null) {
+      return {
+        kind: "malformed",
+        error: new ToolDomainError("query_underspecified", narrowingError, { source: source.id }),
+      };
+    }
+  }
+
   return {
     kind: "ok",
     source,
-    parsedQuery: result.data as EvidenceQuery,
+    parsedQuery,
   };
 }
 

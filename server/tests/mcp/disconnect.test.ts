@@ -182,7 +182,9 @@ describe("degraded session — tool gating", () => {
 
     const r = await h.client.callTool({
       name: "android_debug_search_logs",
-      arguments: { runId },
+      // v0.4.0 Block A: any narrowing filter satisfies the "no fetch-all" gate;
+      // we just need a tool that can succeed on a degraded session.
+      arguments: { runId, level: "I" },
     });
     expect(r.isError).toBeFalsy();
     expect(Array.isArray(structured(r).entries)).toBe(true);

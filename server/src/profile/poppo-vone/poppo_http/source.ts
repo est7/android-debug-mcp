@@ -179,6 +179,35 @@ export const poppoHttpSource: EvidenceSource = {
     return matchPoppoHttpRecord(record as PoppoHttpRecord, query as PoppoHttpQuery);
   },
 
+  /**
+   * v0.4.0 Block A "no fetch-all" enforcement. poppo_http's dataset can
+   * accumulate thousands of records per session (heartbeats every ~10s)
+   * with single records reaching ~700 KB (i18n / large list responses).
+   * The agent must opt into at least one positive filter or `tsMsRange`.
+   *
+   * `excludeHeartbeat` is deliberately NOT counted: it is a *negative*
+   * filter that lets every non-heartbeat record through, which can still
+   * be all-traffic-since-session-start.
+   */
+  validateNarrowingFilter(query: EvidenceQuery): string | null {
+    const q = query as PoppoHttpQuery;
+    const hasPositive =
+      q.pathPrefix !== undefined ||
+      q.methodIn !== undefined ||
+      q.outcome !== undefined ||
+      q.tsMsRange !== undefined ||
+      q.hostContains !== undefined ||
+      q.durationMsGte !== undefined ||
+      q.errorTypeIn !== undefined;
+    if (hasPositive) return null;
+    return (
+      "search_evidence({source:'poppo_http'}) requires at least one narrowing filter: " +
+      "pathPrefix, methodIn, outcome, tsMsRange, hostContains, durationMsGte, or errorTypeIn. " +
+      "excludeHeartbeat alone does not narrow. " +
+      "For 'records around an event', use extract_evidence_context (auto-injects tsMsRange from a marker)."
+    );
+  },
+
   redactForBundle(record: ParsedRecord): ParsedRecord {
     return redactPoppoHttpRecord(record as PoppoHttpRecord);
   },

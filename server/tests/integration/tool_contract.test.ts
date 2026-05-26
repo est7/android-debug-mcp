@@ -161,7 +161,9 @@ const BAD_RUNID_CASES: Array<[string, Record<string, unknown>, string]> = [
   ["android_debug_send_key", { key: "BACK" }, "no_active_session"],
   ["android_debug_swipe", { x1: 1, y1: 1, x2: 2, y2: 2 }, "no_active_session"],
   ["android_debug_capture", { kinds: ["screenshot"] }, "no_active_session"],
-  ["android_debug_search_logs", {}, "run_missing"],
+  // v0.4.0 Block A: search_logs requires a narrowing filter; minimal `level`
+  // gets past the filter gate so runId resolution can fire and emit run_missing.
+  ["android_debug_search_logs", { level: "I" }, "run_missing"],
   ["android_debug_extract_crash_context", {}, "run_missing"],
   ["android_debug_get_run_summary", {}, "run_missing"],
   ["android_debug_collect_bundle", {}, "run_missing"],

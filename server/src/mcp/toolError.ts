@@ -58,6 +58,13 @@ export const TOOL_ERROR_CODES = {
   // can branch on "the source is real but my query shape is wrong" vs
   // "missing top-level field".
   query_malformed: "query_malformed",
+  // v0.4.0 Block A "no fetch-all": surfaced by search_evidence when the
+  // resolved source declares a `validateNarrowingFilter` and the agent's
+  // (validly-shaped) query carries no positive narrowing field — only
+  // `source` and / or negative filters. Distinct from `query_malformed` so
+  // agents branch on "add a filter" vs "fix the field shape". Branchable
+  // extras: {source: string}.
+  query_underspecified: "query_underspecified",
   // v2-G Phase 5: surfaced by collect_bundle when evidence on disk cannot be
   // safely redacted — either metadata's profile name does not resolve via the
   // built-in registry, the run has evidence dirs but `metadata.profile` is

@@ -307,7 +307,7 @@ describe("poppo_http integration — R1 session scoping", () => {
 
     const r = await h.client.callTool({
       name: "android_debug_search_evidence",
-      arguments: { runId, query: { source: "poppo_http" } },
+      arguments: { runId, query: { source: "poppo_http", tsMsRange: { from: 0 } } },
     });
     expect(r.isError).toBeFalsy();
     const sc = structured(r);
@@ -353,7 +353,7 @@ describe("poppo_http integration — R2 sort+keyset pagination", () => {
 
     const page1 = await h.client.callTool({
       name: "android_debug_search_evidence",
-      arguments: { runId, query: { source: "poppo_http" }, limit: 2 },
+      arguments: { runId, query: { source: "poppo_http", tsMsRange: { from: 0 } }, limit: 2 },
     });
     expect(page1.isError).toBeFalsy();
     const sc1 = structured(page1);
@@ -365,7 +365,7 @@ describe("poppo_http integration — R2 sort+keyset pagination", () => {
       name: "android_debug_search_evidence",
       arguments: {
         runId,
-        query: { source: "poppo_http" },
+        query: { source: "poppo_http", tsMsRange: { from: 0 } },
         limit: 2,
         cursor: sc1.nextCursor,
       },
@@ -380,7 +380,7 @@ describe("poppo_http integration — R2 sort+keyset pagination", () => {
       name: "android_debug_search_evidence",
       arguments: {
         runId,
-        query: { source: "poppo_http" },
+        query: { source: "poppo_http", tsMsRange: { from: 0 } },
         limit: 2,
         cursor: sc2.nextCursor,
       },
@@ -402,7 +402,7 @@ describe("poppo_http integration — missing device dir", () => {
     // "No such file or directory" → listDeviceFiles returns [].
     const r = await h.client.callTool({
       name: "android_debug_search_evidence",
-      arguments: { runId, query: { source: "poppo_http" } },
+      arguments: { runId, query: { source: "poppo_http", tsMsRange: { from: 0 } } },
     });
     expect(r.isError).toBeFalsy();
     const sc = structured(r);
@@ -435,7 +435,7 @@ describe("poppo_http integration — stale ls entry (codex Phase 4 audit V2)", (
 
     const r = await h.client.callTool({
       name: "android_debug_search_evidence",
-      arguments: { runId, query: { source: "poppo_http" } },
+      arguments: { runId, query: { source: "poppo_http", tsMsRange: { from: 0 } } },
     });
     expect(r.isError).toBeFalsy();
     const sc = structured(r);
