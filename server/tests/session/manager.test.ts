@@ -35,6 +35,7 @@ function startInput(overrides: Partial<StartSessionInput> = {}): StartSessionInp
     runRoot: scratch,
     runRootSource: "fallback",
     projectRoot: null,
+    profile: null,
     ...overrides,
   };
 }
@@ -94,6 +95,17 @@ describe("SessionManager.start", () => {
     const second = await track(mgr, startInput({ deviceSerial: serial }));
     expect(second.isActive).toBe(true);
   });
+
+  // v2-G Phase 3 / codex audit M1: see the "Failure cleanup (codex Phase 3
+  // audit M1)" comment block in SessionManager.start for the rationale and the
+  // exact cleanup site. Regression-test gap (deferred): triggering a real
+  // mkdir failure inside the precreate loop without invasive ESM mocks is not
+  // tractable today — node:fs/promises.mkdir is a frozen ESM export so vi.spyOn
+  // fails with "Cannot redefine property: mkdir"; pre-placing a file at the
+  // collision point requires predicting the freshly-minted runId; and routing
+  // the manager through a dep-injected mkdir would invert prod control flow
+  // only for this test. "frees the tuple after stop so the same tuple can
+  // start again" exercises the post-finalize cleanup symmetry.
 });
 
 describe("SessionManager.resolveForStop (§ D-M7)", () => {

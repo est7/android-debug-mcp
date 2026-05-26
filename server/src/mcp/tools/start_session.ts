@@ -112,6 +112,7 @@ export function registerStartSession(server: McpServer, manager: SessionManager)
         runRoot,
         runRootSource: source,
         projectRoot,
+        profile: loadedProfile === null ? null : loadedProfile.profile,
       });
 
       // Everything past this point runs AFTER the session is registered and
@@ -123,6 +124,11 @@ export function registerStartSession(server: McpServer, manager: SessionManager)
           getDeviceProps(deviceSerial),
         ]);
         const git = getGitInfo(input.projectRoot ?? process.cwd());
+        // v2-G Phase 3: now that deviceProps resolved the device timezone,
+        // hand it to the Session so EvidenceContext.deviceTimezone reflects
+        // the real device. Pre-evidenceTimezone search_evidence calls (none
+        // possible — agent has no runId yet) would have seen null.
+        session.setDeviceTimezone(deviceProps.timezone ?? null);
         await session.patchMetadata((current) => ({
           ...current,
           app: { versionName: version.versionName, versionCode: version.versionCode },

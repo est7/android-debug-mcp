@@ -6,6 +6,7 @@ import { registerCapture } from "./mcp/tools/capture.ts";
 import { registerClearAppData } from "./mcp/tools/clear_app_data.ts";
 import { registerCollectBundle } from "./mcp/tools/collect_bundle.ts";
 import { registerExtractCrashContext } from "./mcp/tools/extract_crash_context.ts";
+import { registerExtractEvidenceContext } from "./mcp/tools/extract_evidence_context.ts";
 import { registerGetAppState } from "./mcp/tools/get_app_state.ts";
 import { registerGetRunSummary } from "./mcp/tools/get_run_summary.ts";
 import { registerInputText } from "./mcp/tools/input_text.ts";
@@ -15,6 +16,7 @@ import { registerListRuns } from "./mcp/tools/list_runs.ts";
 import { registerLongPress } from "./mcp/tools/long_press.ts";
 import { registerMapUiNodeToSource } from "./mcp/tools/map_ui_node_to_source.ts";
 import { registerMarkEvent } from "./mcp/tools/mark_event.ts";
+import { registerSearchEvidence } from "./mcp/tools/search_evidence.ts";
 import { registerSearchLogs } from "./mcp/tools/search_logs.ts";
 import { registerSendKey } from "./mcp/tools/send_key.ts";
 import { registerStartSession } from "./mcp/tools/start_session.ts";
@@ -29,7 +31,7 @@ import { resolveRunRoot } from "./store/paths.ts";
 import { VERSION } from "./version.ts";
 
 /** The registered tool inventory size — kept in sync with `ANDROID_DEBUG_TOOL_NAMES`. */
-const TOOL_COUNT = 21;
+const TOOL_COUNT = 23;
 
 /**
  * Build the server, register every tool, recover orphaned runs, and connect
@@ -92,4 +94,6 @@ export function registerAllTools(server: McpServer, manager: SessionManager): vo
   registerGetRunSummary(server, manager);
   registerListRuns(server, manager);
   registerCollectBundle(server, manager);
+  registerSearchEvidence(server, manager);
+  registerExtractEvidenceContext(server, manager);
 }

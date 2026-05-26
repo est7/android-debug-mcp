@@ -1,4 +1,5 @@
 import { LogcatChannel } from "../logcat/channel.ts";
+import type { EvidenceContext, Profile } from "../profile/types.ts";
 import { redactValue } from "../redact/redact.ts";
 import type { LockHandle } from "../store/lock.ts";
 import { type Metadata, type RunStatus, patchMetadata } from "../store/metadata.ts";
@@ -34,6 +35,13 @@ export interface SessionInit {
   readonly packageName: string;
   readonly startedAt: Date;
   readonly timers: SessionTimers;
+  /**
+   * v2-G Q11: the resolved built-in profile, or null for a vanilla session
+   * (no `.android-debug-mcp/profile.json`). When null, every evidence tool
+   * soft-empties; when non-null but `evidenceSources` is empty (Phase 3 with
+   * poppo-vone whose sources land in Phase 4), tools also soft-empty.
+   */
+  readonly profile: Profile | null;
 }
 
 /**
@@ -49,6 +57,7 @@ export class Session {
   readonly userId: number;
   readonly packageName: string;
   readonly startedAt: Date;
+  readonly profile: Profile | null;
 
   private readonly runFolder: RunFolder;
   private readonly lock: LockHandle;
@@ -60,6 +69,13 @@ export class Session {
   private lastCommandAt: Date | null = null;
   private lastLogAt: Date | null = null;
   private cachedPids: number[] = [];
+  /**
+   * `persist.sys.timezone` captured later in start_session via getDeviceProps.
+   * Stays null until then; tools that need it (search_evidence) tolerate null
+   * by deferring to the source's filename-mtime heuristics. See
+   * {@link EvidenceContext.deviceTimezone}.
+   */
+  private deviceTimezone: string | null = null;
 
   constructor(init: SessionInit) {
     this.runId = init.runId;
@@ -71,6 +87,21 @@ export class Session {
     this.packageName = init.packageName;
     this.startedAt = init.startedAt;
     this.timers = init.timers;
+    this.profile = init.profile;
+  }
+
+  /** Set on entry to start_session after `getDeviceProps` returns. */
+  setDeviceTimezone(tz: string | null): void {
+    this.deviceTimezone = tz;
+  }
+
+  /** Build the {@link EvidenceContext} an `EvidenceSource` needs at I/O time. */
+  evidenceContext(): EvidenceContext {
+    return {
+      deviceSerial: this.deviceSerial,
+      sessionStartMs: this.startedAt.getTime(),
+      deviceTimezone: this.deviceTimezone,
+    };
   }
 
   get currentStatus(): SessionLiveStatus | SessionEndStatus {

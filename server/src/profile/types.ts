@@ -105,6 +105,31 @@ export interface EvidenceSource {
   readonly id: string;
 
   /**
+   * Strict zod schema for the source-specific `query` shape inside
+   * `search_evidence` / `extract_evidence_context`.
+   *
+   * Q4 (discriminated-union at tool boundary) cannot be expressed as a single
+   * static `z.discriminatedUnion` at the MCP `registerTool` call site because
+   * (a) arms are profile-dependent (vanilla session has zero arms; zod refuses
+   * to construct a zero-arm discriminated union) and (b) MCP requires the
+   * input schema to be static at registration. So the tool boundary keeps
+   * `query` loose (`z.object({ source: z.string() }).passthrough()`), the
+   * handler looks up the source by `query.source`, then calls
+   * `source.querySchema.parse(query)` for per-source strict validation.
+   *
+   * Concrete sources MUST:
+   *   - Build the schema with `.strict()` so unknown keys are rejected.
+   *   - Pin the discriminator with `source: z.literal(<this.id>)` so the
+   *     schema itself enforces that records and queries agree on the source
+   *     name (the dispatcher does NOT re-check `query.source === id` —
+   *     it trusts the schema).
+   *
+   * Validation failure surfaces as `ToolDomainError("query_malformed")`,
+   * not as a JSON-RPC protocol error — agents branch on it.
+   */
+  readonly querySchema: z.ZodTypeAny;
+
+  /**
    * Enumerate device-side candidate files within the session's time window.
    * Implementations SHOULD apply the source's own filename-date heuristic
    * (e.g. `http_<yyyy-MM-dd>_*.jsonl` with a 1-day buffer for tz / cross-day

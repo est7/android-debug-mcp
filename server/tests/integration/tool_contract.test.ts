@@ -45,10 +45,10 @@ function errorOf(result: unknown): string {
 }
 
 describe("v1 tool inventory", () => {
-  it("registers exactly the 21 tools of ANDROID_DEBUG_TOOL_NAMES", async () => {
+  it("registers exactly the 23 tools of ANDROID_DEBUG_TOOL_NAMES (v1 + v2-A + v2-F + v2-G)", async () => {
     const client = await harness();
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(21);
+    expect(tools).toHaveLength(23);
     expect(new Set(tools.map((t) => t.name))).toEqual(new Set(ANDROID_DEBUG_TOOL_NAMES));
   });
 
@@ -74,6 +74,10 @@ describe("v1 tool inventory", () => {
       "android_debug_capture",
       "android_debug_tap_node",
       "android_debug_list_elements",
+      // v2-G Phase 3: lazy-pull writes files + events + commands even on
+      // cache-hit (commands.jsonl always gets the audit row). Same rule.
+      "android_debug_search_evidence",
+      "android_debug_extract_evidence_context",
     ]);
     const seen = tools.filter((t) => evidenceTools.has(t.name));
     expect(seen.length).toBe(evidenceTools.size);
@@ -166,6 +170,16 @@ const BAD_RUNID_CASES: Array<[string, Record<string, unknown>, string]> = [
     "android_debug_map_ui_node_to_source",
     { anchorNode: null, foregroundActivity: null, ancestorChain: [] },
     "run_missing",
+  ],
+  // v2-G Phase 3: both evidence tools require a live session for the
+  // EvidenceContext (device serial + timezone), so an unknown runId surfaces
+  // as `no_active_session` — same family as `tap`/`capture`, not the
+  // closed-run-aware `search_logs`.
+  ["android_debug_search_evidence", { query: { source: "fake_src" } }, "no_active_session"],
+  [
+    "android_debug_extract_evidence_context",
+    { markerIsoTs: "2026-05-26T00:00:00.000Z", query: { source: "fake_src" } },
+    "no_active_session",
   ],
 ];
 

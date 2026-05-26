@@ -51,6 +51,13 @@ export const TOOL_ERROR_CODES = {
   // with a half-resolved adapter.
   profile_malformed: "profile_malformed",
   profile_unknown: "profile_unknown",
+  // v2-G Phase 3: surfaced by search_evidence / extract_evidence_context when
+  // `query` has a known `source` (it resolves against the runId's profile) but
+  // the source-specific fields fail per-source strict zod validation
+  // (Q4 inner discriminated-union). Distinct from `invalid_argument` so agents
+  // can branch on "the source is real but my query shape is wrong" vs
+  // "missing top-level field".
+  query_malformed: "query_malformed",
 } as const;
 
 export type ToolErrorCode = (typeof TOOL_ERROR_CODES)[keyof typeof TOOL_ERROR_CODES];

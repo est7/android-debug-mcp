@@ -104,6 +104,67 @@ describe("renderSummary", () => {
     expect(md).toContain("tap_node (100, 200) → com.example.app:id/login — Login");
   });
 
+  it("describes evidence_pulled events with source + trigger + file list", () => {
+    const md = renderSummary(
+      makeRunData({
+        events: [
+          {
+            type: "evidence_pulled",
+            ts: "T5",
+            source: "poppo_http",
+            trigger: "lazy",
+            files: ["http_2026-05-26_0.jsonl"],
+          },
+          {
+            type: "evidence_pulled",
+            ts: "T6",
+            source: "poppo_http",
+            trigger: "seal",
+            files: ["http_2026-05-26_0.jsonl", "http_2026-05-26_1.jsonl"],
+          },
+        ],
+      }),
+    );
+    expect(md).toContain("evidence_pulled poppo_http (lazy) — http_2026-05-26_0.jsonl");
+    expect(md).toContain(
+      "evidence_pulled poppo_http (seal) — http_2026-05-26_0.jsonl, http_2026-05-26_1.jsonl",
+    );
+  });
+
+  it("describes evidence_seal_failed with structured {code,message} error", () => {
+    const md = renderSummary(
+      makeRunData({
+        events: [
+          {
+            type: "evidence_seal_failed",
+            ts: "T7",
+            source: "poppo_http",
+            error: { code: "adb_command_failed", message: "pull timed out" },
+          },
+        ],
+      }),
+    );
+    expect(md).toContain("evidence_seal_failed poppo_http — adb_command_failed: pull timed out");
+  });
+
+  it("tolerates legacy string-form error on evidence_seal_failed for older runs", () => {
+    const md = renderSummary(
+      makeRunData({
+        events: [
+          {
+            type: "evidence_seal_failed",
+            ts: "T8",
+            source: "poppo_http",
+            error: "legacy string from a pre-fix events.jsonl",
+          },
+        ],
+      }),
+    );
+    expect(md).toContain(
+      "evidence_seal_failed poppo_http — legacy string from a pre-fix events.jsonl",
+    );
+  });
+
   it("caps the timeline and notes how many events were omitted", () => {
     const events = Array.from({ length: 250 }, (_, i) => ({
       type: "mark",

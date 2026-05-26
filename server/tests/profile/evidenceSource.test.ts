@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import type {
   DeviceFileEntry,
   EvidenceContext,
@@ -37,6 +38,12 @@ function makeFake(opts: {
 }): EvidenceSource {
   return {
     id: "fake_src",
+    querySchema: z
+      .object({
+        source: z.literal("fake_src"),
+        pathPrefix: z.string().optional(),
+      })
+      .strict(),
     async listDeviceFiles(_ctx: EvidenceContext) {
       return opts.files;
     },
@@ -143,5 +150,25 @@ describe("EvidenceSource interface contract", () => {
     const src = makeFake({ files: [] });
     const rec = src.parseLine("1|/p|h") as ParsedRecord;
     expect(rec.source).toBe(src.id);
+  });
+
+  describe("querySchema (Q4 per-source strict validation)", () => {
+    it("accepts a well-formed query whose source literal matches source.id", () => {
+      const src = makeFake({ files: [] });
+      const parsed = src.querySchema.parse({ source: "fake_src", pathPrefix: "/api" });
+      expect(parsed).toEqual({ source: "fake_src", pathPrefix: "/api" });
+    });
+
+    it("rejects unknown keys (.strict())", () => {
+      const src = makeFake({ files: [] });
+      expect(() =>
+        src.querySchema.parse({ source: "fake_src", pathPrefix: "/x", junk: 1 }),
+      ).toThrow();
+    });
+
+    it("rejects a query whose source literal does not match source.id", () => {
+      const src = makeFake({ files: [] });
+      expect(() => src.querySchema.parse({ source: "other_src" })).toThrow();
+    });
   });
 });

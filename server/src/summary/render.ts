@@ -105,6 +105,30 @@ function describeEvent(e: Record<string, unknown>): string {
       const n = Array.isArray(e.candidates) ? e.candidates.length : 0;
       return `source_mapping ${anchor} → ${conf} (${n} candidate${n === 1 ? "" : "s"})`;
     }
+    case "evidence_pulled": {
+      const src = asString(e.source) ?? "?";
+      const trigger = asString(e.trigger) ?? "?";
+      const files = Array.isArray(e.files) ? e.files : [];
+      const fileLabel = files.length === 0 ? "no files" : files.join(", ");
+      return `evidence_pulled ${src} (${trigger}) — ${fileLabel}`;
+    }
+    case "evidence_seal_failed": {
+      // `error` is `{code, message}` per Phase 3 codex audit (F); the legacy
+      // string form is also tolerated so a manually-edited events.jsonl from
+      // an older run still renders something useful.
+      const err = e.error;
+      let errLabel: string;
+      if (typeof err === "string") {
+        errLabel = err;
+      } else if (typeof err === "object" && err !== null) {
+        const code = asString((err as Record<string, unknown>).code) ?? "?";
+        const message = asString((err as Record<string, unknown>).message) ?? "?";
+        errLabel = `${code}: ${message}`;
+      } else {
+        errLabel = "?";
+      }
+      return `evidence_seal_failed ${asString(e.source) ?? "?"} — ${errLabel}`;
+    }
     case "auto_stopped_by_timeout":
       return `auto-stopped — ${asString(e.reason) ?? "?"}`;
     case "device_disconnected":
