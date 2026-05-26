@@ -166,4 +166,103 @@ describe("collect_bundle tool", () => {
     expect(r.isError).toBe(true);
     expect(JSON.parse(callText(r)).error).toBe("run_missing");
   });
+
+  // --- v2-G Phase 5 (i): evidence_redaction_unavailable guard (codex β) ----
+
+  /** Add an evidence/<sourceId>/ subdir to an existing run. */
+  function addEvidenceDir(pkg: string, runId: string, sourceId: string): void {
+    const runDir = join(runRoot, pkg, "u0", runId);
+    const eDir = join(runDir, "evidence", sourceId);
+    mkdirSync(eDir, { recursive: true });
+    writeFileSync(join(eDir, "http_2026-05-26_0.jsonl"), "");
+  }
+
+  /** Patch a run's metadata.profile field. */
+  async function patchProfile(
+    pkg: string,
+    runId: string,
+    profile: { name: string; version: 1 } | null,
+  ): Promise<void> {
+    const runDir = join(runRoot, pkg, "u0", runId);
+    const { readMetadata, writeMetadata } = await import("../../src/store/metadata.ts");
+    const cur = await readMetadata(runDir);
+    await writeMetadata(runDir, { ...cur, profile });
+  }
+
+  it("evidence_redaction_unavailable when profile is null but evidence/ dir exists", async () => {
+    const client = await harness();
+    await makeRun("com.bundle.evnull", "2026-05-20T10-00-00.000Z_ev1", "2026-05-20T10:00:00.000Z");
+    addEvidenceDir("com.bundle.evnull", "2026-05-20T10-00-00.000Z_ev1", "poppo_http");
+    // metadata.profile defaults to null in makeRun.
+    const r = await client.callTool({
+      name: "android_debug_collect_bundle",
+      arguments: { runId: "2026-05-20T10-00-00.000Z_ev1" },
+    });
+    expect(r.isError).toBe(true);
+    const err = JSON.parse(callText(r)) as {
+      error: string;
+      profileName: string | null;
+      sourceId: string | null;
+    };
+    expect(err.error).toBe("evidence_redaction_unavailable");
+    expect(err.profileName).toBeNull();
+    expect(err.sourceId).toBe("poppo_http");
+  });
+
+  it("evidence_redaction_unavailable when metadata.profile names an unknown profile", async () => {
+    const client = await harness();
+    await makeRun("com.bundle.evx", "2026-05-20T10-00-00.000Z_ev2", "2026-05-20T10:00:00.000Z");
+    addEvidenceDir("com.bundle.evx", "2026-05-20T10-00-00.000Z_ev2", "poppo_http");
+    await patchProfile("com.bundle.evx", "2026-05-20T10-00-00.000Z_ev2", {
+      name: "no-such-profile",
+      version: 1,
+    });
+    const r = await client.callTool({
+      name: "android_debug_collect_bundle",
+      arguments: { runId: "2026-05-20T10-00-00.000Z_ev2" },
+    });
+    expect(r.isError).toBe(true);
+    const err = JSON.parse(callText(r)) as { error: string; profileName: string };
+    expect(err.error).toBe("evidence_redaction_unavailable");
+    expect(err.profileName).toBe("no-such-profile");
+  });
+
+  it("evidence_redaction_unavailable when evidence dir's sourceId is not declared by the resolved profile", async () => {
+    const client = await harness();
+    await makeRun("com.bundle.evorf", "2026-05-20T10-00-00.000Z_ev3", "2026-05-20T10:00:00.000Z");
+    // poppo-vone declares `poppo_http`; an evidence/orphan_src/ subdir is undeclared.
+    addEvidenceDir("com.bundle.evorf", "2026-05-20T10-00-00.000Z_ev3", "orphan_src");
+    await patchProfile("com.bundle.evorf", "2026-05-20T10-00-00.000Z_ev3", {
+      name: "poppo-vone",
+      version: 1,
+    });
+    const r = await client.callTool({
+      name: "android_debug_collect_bundle",
+      arguments: { runId: "2026-05-20T10-00-00.000Z_ev3" },
+    });
+    expect(r.isError).toBe(true);
+    const err = JSON.parse(callText(r)) as {
+      error: string;
+      profileName: string;
+      sourceId: string;
+    };
+    expect(err.error).toBe("evidence_redaction_unavailable");
+    expect(err.profileName).toBe("poppo-vone");
+    expect(err.sourceId).toBe("orphan_src");
+  });
+
+  it("vanilla run with profile null + NO evidence dir still bundles (no false-positive guard)", async () => {
+    const client = await harness();
+    await makeRun(
+      "com.bundle.vanilla2",
+      "2026-05-20T10-00-00.000Z_ev4",
+      "2026-05-20T10:00:00.000Z",
+    );
+    // No evidence dir, no profile — should succeed as before.
+    const r = await client.callTool({
+      name: "android_debug_collect_bundle",
+      arguments: { runId: "2026-05-20T10-00-00.000Z_ev4" },
+    });
+    expect(r.isError).toBeFalsy();
+  });
 });

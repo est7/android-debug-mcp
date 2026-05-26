@@ -58,6 +58,15 @@ export const TOOL_ERROR_CODES = {
   // can branch on "the source is real but my query shape is wrong" vs
   // "missing top-level field".
   query_malformed: "query_malformed",
+  // v2-G Phase 5: surfaced by collect_bundle when evidence on disk cannot be
+  // safely redacted — either metadata's profile name does not resolve via the
+  // built-in registry, the run has evidence dirs but `metadata.profile` is
+  // null (pre-Phase-3 run on a Phase-3+ binary), or an evidence/<id>/ dir
+  // exists for a sourceId the resolved profile does not declare. Hard error
+  // rather than silent skip: Q6 mandates redact at bundle export, and shipping
+  // raw evidence past this boundary is exactly the security cliff Q6 prevents.
+  // Branchable extras: {profileName: string | null, sourceId?: string}.
+  evidence_redaction_unavailable: "evidence_redaction_unavailable",
 } as const;
 
 export type ToolErrorCode = (typeof TOOL_ERROR_CODES)[keyof typeof TOOL_ERROR_CODES];
