@@ -98,7 +98,13 @@ function poppoRecord(opts: {
   authValue?: string;
   /** When set, includes a parse-null sentinel line in the file before this record. */
   withGarbageLine?: boolean;
+  /** When set, the response body's `text` field is padded to ~`bodyTextBytes` chars. */
+  bodyTextBytes?: number;
 }): string {
+  const responseText =
+    opts.bodyTextBytes !== undefined && opts.bodyTextBytes > 0
+      ? `{"k":"${"x".repeat(opts.bodyTextBytes)}"}`
+      : '{"k":"v"}';
   return JSON.stringify({
     v: 1,
     runId: "1779260470000_18866",
@@ -133,8 +139,8 @@ function poppoRecord(opts: {
       body: {
         contentType: "application/json",
         charset: "UTF-8",
-        text: '{"k":"v"}',
-        textBytes: 9,
+        text: responseText,
+        textBytes: responseText.length,
         omittedReason: null,
         preview: null,
         previewBytes: null,
@@ -146,7 +152,12 @@ function poppoRecord(opts: {
 }
 
 function makePoppoRunDir(
-  opts: { withGarbageLine?: boolean; withMtimeCache?: boolean } = {},
+  opts: {
+    withGarbageLine?: boolean;
+    withMtimeCache?: boolean;
+    /** When set, the single poppo_http record carries a response body of this size. */
+    bodyTextBytes?: number;
+  } = {},
 ): string {
   const runDir = join(workDir, RUN_ID);
   mkdirSync(join(runDir, "artifacts"), { recursive: true });
@@ -172,6 +183,7 @@ function makePoppoRunDir(
       seq: 1,
       url: "https://api.example.com/users?_sign=SECRETSIGN&id=42",
       authValue: "Bearer SECRETTOKEN",
+      ...(opts.bodyTextBytes !== undefined ? { bodyTextBytes: opts.bodyTextBytes } : {}),
     }),
   );
   lines.push("");
@@ -196,10 +208,12 @@ function makePoppoRunDir(
 async function buildPoppo(opts: {
   logs: BundleLogs;
   withGarbageLine?: boolean;
+  bodyTextBytes?: number;
 }): Promise<{ entries: string[]; bundlePath: string }> {
   const result = await createBundle({
     runDir: makePoppoRunDir({
       ...(opts.withGarbageLine === true ? { withGarbageLine: true } : {}),
+      ...(opts.bodyTextBytes !== undefined ? { bodyTextBytes: opts.bodyTextBytes } : {}),
     }),
     runId: RUN_ID,
     bundlesDir: join(workDir, "bundles"),
@@ -279,5 +293,33 @@ describe("createBundle — v2-G Phase 5 (i) evidence redaction (Q6)", () => {
     expect(evidence).not.toContain("not-a-valid-json-record-half-line");
     // Exactly one valid record line (plus trailing newline).
     expect(evidence.trim().split("\n")).toHaveLength(1);
+  });
+
+  it("accepts an evidence record well above the default 64 KiB cap (v2-G acceptance regression)", async () => {
+    // The default AppendStream cap is 64 KiB — appropriate for events / logcat
+    // streams the server produces. Pre-fix, evidence redaction inherited this
+    // cap and threw `JsonlLineTooLargeError` on Poppo i18n responses (~670 KB),
+    // blocking collect_bundle entirely. We now open the redact stream with a
+    // 16 MiB override; an ~800 KiB record (10x the old ceiling, comfortably
+    // below the new one) must round-trip into the bundle intact.
+    const { entries, bundlePath } = await buildPoppo({
+      logs: "redacted",
+      bodyTextBytes: 800 * 1024,
+    });
+    expect(entries.some((e) => e.endsWith("evidence/poppo_http/http_2026-05-26_0.jsonl"))).toBe(
+      true,
+    );
+    const extractDir = makeExtractDir();
+    await exec("tar", ["-xzf", bundlePath, "-C", extractDir]);
+    const evidence = readFileSync(
+      join(extractDir, RUN_ID, "evidence", "poppo_http", "http_2026-05-26_0.jsonl"),
+      "utf8",
+    );
+    // Record landed in the bundle (>800 KiB on disk).
+    expect(evidence.length).toBeGreaterThan(800 * 1024);
+    // Redaction still applied across the large record.
+    expect(evidence).not.toContain("SECRETTOKEN");
+    expect(evidence).not.toContain("SECRETSIGN");
+    expect(evidence).toContain('"value":"[REDACTED]"');
   });
 });

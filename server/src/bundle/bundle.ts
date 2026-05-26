@@ -12,11 +12,14 @@ import { AppendStream } from "../store/jsonl.ts";
 /**
  * Per-line ceiling for evidence files re-written during bundle redaction.
  * External-producer evidence records can legitimately dwarf the default
- * 64 KiB cap (observed: Poppo i18n `lang.json` responses at ~670 KB). 1 MiB
- * covers the observed maximum with ~50% headroom; anything beyond is a signal
- * to investigate the producing endpoint, not silently swallow.
+ * 64 KiB cap (observed: Poppo i18n `lang.json` responses at ~670 KB; other
+ * social-live endpoints — gift packages, list / paging responses, base64
+ * payloads — can plausibly run several megabytes). The ceiling exists only
+ * as a "this is clearly a bug" tripwire so a runaway producer can't fill
+ * the bundle with a multi-GB single line; 16 MiB covers any reasonable
+ * HTTP record while still being narrow enough to flag pathological cases.
  */
-const EVIDENCE_BUNDLE_MAX_LINE_BYTES = 1024 * 1024;
+const EVIDENCE_BUNDLE_MAX_LINE_BYTES = 16 * 1024 * 1024;
 
 const execFileAsync = promisify(execFile);
 
