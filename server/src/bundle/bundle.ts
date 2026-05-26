@@ -9,6 +9,15 @@ import { redactString } from "../redact/redact.ts";
 import { readLinesFrom } from "../search/line_reader.ts";
 import { AppendStream } from "../store/jsonl.ts";
 
+/**
+ * Per-line ceiling for evidence files re-written during bundle redaction.
+ * External-producer evidence records can legitimately dwarf the default
+ * 64 KiB cap (observed: Poppo i18n `lang.json` responses at ~670 KB). 1 MiB
+ * covers the observed maximum with ~50% headroom; anything beyond is a signal
+ * to investigate the producing endpoint, not silently swallow.
+ */
+const EVIDENCE_BUNDLE_MAX_LINE_BYTES = 1024 * 1024;
+
 const execFileAsync = promisify(execFile);
 
 /** Hard ceiling for the `tar` child — a debug-run bundle never legitimately runs this long. */
@@ -133,7 +142,9 @@ async function redactEvidenceDir(stageRunDir: string, profile: Profile | null): 
       if (!name.endsWith(".jsonl")) continue; // ignore non-jsonl (binary attachments etc.)
       const inputPath = join(sourceDir, name);
       const outputPath = `${inputPath}.tmp-redact-${process.pid}-${Date.now()}`;
-      const out = await AppendStream.open(outputPath);
+      const out = await AppendStream.open(outputPath, {
+        maxLineBytes: EVIDENCE_BUNDLE_MAX_LINE_BYTES,
+      });
       try {
         for await (const { text } of readLinesFrom(inputPath)) {
           const rec = source.parseLine(text);

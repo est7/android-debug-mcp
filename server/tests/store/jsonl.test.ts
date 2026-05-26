@@ -110,6 +110,44 @@ describe("AppendStream", () => {
     expect(MAX_LINE_BYTES).toBe(64 * 1024);
   });
 
+  it("honors maxLineBytes override: accepts lines above default cap, still rejects above the override", async () => {
+    // v2-G bundle evidence redactor opens the per-source rewrite stream with a
+    // larger cap because external-producer records (Poppo i18n at ~670 KB) can
+    // dwarf the default. Default-cap-sized stream rejects it; override-cap
+    // stream accepts it.
+    const overrideCap = 256 * 1024;
+    const defaultPath = join(scratch, "default-cap.jsonl");
+    const overridePath = join(scratch, "override-cap.jsonl");
+    const defaultStream = await AppendStream.open(defaultPath);
+    const overrideStream = await AppendStream.open(overridePath, { maxLineBytes: overrideCap });
+    expect(defaultStream.maxLineBytes).toBe(MAX_LINE_BYTES);
+    expect(overrideStream.maxLineBytes).toBe(overrideCap);
+    // 128 KiB payload: comfortably above default 64 KiB, comfortably below 256 KiB override.
+    const mid = { msg: "x".repeat(128 * 1024) };
+    await expect(defaultStream.append(mid)).rejects.toBeInstanceOf(JsonlLineTooLargeError);
+    await overrideStream.append(mid);
+    // A payload past the OVERRIDE cap still throws — override raises the
+    // ceiling, it does not disable the check entirely.
+    const tooBig = { msg: "x".repeat(overrideCap + 100) };
+    await expect(overrideStream.append(tooBig)).rejects.toBeInstanceOf(JsonlLineTooLargeError);
+    // Followup small append on either stream still works → no torn state.
+    await defaultStream.append({ ok: 1 });
+    await overrideStream.append({ ok: 2 });
+    await defaultStream.close();
+    await overrideStream.close();
+    const defaultLines = readFileSync(defaultPath, "utf8")
+      .split("\n")
+      .filter((l) => l !== "");
+    const overrideLines = readFileSync(overridePath, "utf8")
+      .split("\n")
+      .filter((l) => l !== "");
+    expect(defaultLines).toHaveLength(1);
+    expect(JSON.parse(defaultLines[0] as string)).toEqual({ ok: 1 });
+    expect(overrideLines).toHaveLength(2);
+    expect(JSON.parse(overrideLines[0] as string)).toEqual(mid);
+    expect(JSON.parse(overrideLines[1] as string)).toEqual({ ok: 2 });
+  });
+
   it.each<[string, unknown]>([
     ["undefined", undefined],
     ["function", () => 1],

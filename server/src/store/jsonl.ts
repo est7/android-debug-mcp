@@ -4,8 +4,24 @@ import { dirname } from "node:path";
 
 /** Hard ceiling for a single JSONL line, in bytes. Phase 5 redaction is the
  * upstream backstop for log messages; this cap is a per-stream invariant so a
- * future bug elsewhere cannot push a multi-MB record through us silently. */
+ * future bug elsewhere cannot push a multi-MB record through us silently.
+ *
+ * Streams whose records come from an external producer (v2-G evidence bundle
+ * re-write) cannot promise this size — they pass an explicit `maxLineBytes`
+ * via {@link OpenStreamOptions}, opting out of the default cap. */
 export const MAX_LINE_BYTES = 64 * 1024;
+
+export interface OpenStreamOptions {
+  /**
+   * Override the per-line cap enforced by {@link AppendStream.append}. Default
+   * is {@link MAX_LINE_BYTES} (64 KiB), appropriate for streams the server
+   * itself produces (events, commands, logcat, crash). External-producer
+   * evidence files re-written through the bundle redactor opt into a larger
+   * value because their record sizes are bounded by the producer, not us
+   * (e.g. Poppo HTTP records carrying ~600 KB i18n response bodies).
+   */
+  readonly maxLineBytes?: number;
+}
 
 export class JsonlClosedError extends Error {
   constructor(path: string) {
@@ -91,14 +107,15 @@ export class AppendStream {
   private constructor(
     public readonly path: string,
     private handle: FileHandle,
+    public readonly maxLineBytes: number,
     private closed = false,
   ) {}
 
-  static async open(path: string): Promise<AppendStream> {
+  static async open(path: string, options: OpenStreamOptions = {}): Promise<AppendStream> {
     await mkdir(dirname(path), { recursive: true });
     // 'a' = O_WRONLY | O_CREAT | O_APPEND.
     const handle = await open(path, "a");
-    return new AppendStream(path, handle);
+    return new AppendStream(path, handle, options.maxLineBytes ?? MAX_LINE_BYTES);
   }
 
   async append(record: unknown): Promise<void> {
@@ -117,8 +134,8 @@ export class AppendStream {
       throw new JsonlInvalidRecordError(this.path, describeRecordType(record));
     }
     const buf = Buffer.from(`${encoded}\n`, "utf8");
-    if (buf.length > MAX_LINE_BYTES) {
-      throw new JsonlLineTooLargeError(this.path, buf.length, MAX_LINE_BYTES);
+    if (buf.length > this.maxLineBytes) {
+      throw new JsonlLineTooLargeError(this.path, buf.length, this.maxLineBytes);
     }
     const result = await this.handle.write(buf);
     if (result.bytesWritten !== buf.length) {
