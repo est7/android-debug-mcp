@@ -1,12 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { ToolDomainError } from "../mcp/toolError.ts";
 import type {
   EvidenceContext,
   EvidenceQuery,
   EvidenceSource,
   ParsedRecord,
 } from "../profile/types.ts";
-import { decodeCursor, encodeCursor } from "./cursor.ts";
+import { compareSortKeys, decodeCursor, encodeCursor } from "./cursor.ts";
 import {
   type MtimeCache,
   readMtimeCache,
@@ -90,8 +91,33 @@ export async function searchEvidence(input: SearchEvidenceInput): Promise<Search
     await writeMtimeCache(input.runDir, input.source.id, cache);
   }
 
+  // Phase 4 amendment (codex audit R1): source may decorate the agent's
+  // query with session-bound defaults (e.g. poppo_http raises
+  // `tsMsRange.from` to ctx.sessionStartMs to keep cross-run records from
+  // leaking into the current MCP session). Pure call; runs before any
+  // iteration so the bound query reaches every matchQuery.
+  const effectiveQuery: EvidenceQuery = input.source.bindSession
+    ? input.source.bindSession(input.parsedQuery, input.ctx)
+    : input.parsedQuery;
+
+  // Phase 4 amendment (codex audit R2): if the source declares a sortKey,
+  // switch to collect-then-sort-then-keyset-paginate. Otherwise keep Phase
+  // 3's streaming file/line cursor path.
+  if (input.source.sortKey !== undefined) {
+    return runSortPath(input, effectiveQuery, cache, pulls);
+  }
+  return runStreamPath(input, effectiveQuery, cache, pulls);
+}
+
+/** Phase 3 streaming path — basename → line order, file/lineOffset cursor. */
+async function runStreamPath(
+  input: SearchEvidenceInput,
+  query: EvidenceQuery,
+  cache: MtimeCache,
+  pulls: readonly PullSummary[],
+): Promise<SearchEvidenceResult> {
   const localFiles = sortedLocalFiles(cache);
-  const cursorState =
+  const decoded =
     input.cursor !== null
       ? decodeCursor(input.cursor, {
           runId: input.runId,
@@ -100,20 +126,28 @@ export async function searchEvidence(input: SearchEvidenceInput): Promise<Search
           cache,
         })
       : null;
+  if (decoded !== null && decoded.kind !== "stream") {
+    throw new ToolDomainError(
+      "invalid_cursor",
+      `cursor kind '${decoded.kind}' does not match source '${input.source.id}' iteration mode (stream)`,
+      {},
+    );
+  }
 
   const iter = await iterateLocal({
     source: input.source,
-    parsedQuery: input.parsedQuery,
+    parsedQuery: query,
     files: localFiles,
     limit: input.limit,
-    resumeLocalPath: cursorState?.localPath ?? null,
-    resumeLineOffset: cursorState?.cursor.lineOffset ?? 0,
+    resumeLocalPath: decoded?.localPath ?? null,
+    resumeLineOffset: decoded?.cursor.lineOffset ?? 0,
   });
 
   const nextCursor =
     iter.next === null
       ? null
       : encodeCursor({
+          kind: "stream",
           runId: input.runId,
           source: input.source.id,
           fileKey: basename(iter.next.localPath),
@@ -127,6 +161,102 @@ export async function searchEvidence(input: SearchEvidenceInput): Promise<Search
     statsRun: {
       filesScanned: iter.filesScanned,
       recordsScanned: iter.recordsScanned,
+      pullsTriggered: pulls.length,
+      pulledFiles: pulls.map((p) => p.localPath),
+    },
+  };
+}
+
+/**
+ * Phase 4 sort path — collect every matching record from every local file,
+ * sort by `source.sortKey()`, then keyset-paginate. See `cursor.ts` § "Live
+ * append-only caveat" for the snapshot-consistency limit.
+ */
+async function runSortPath(
+  input: SearchEvidenceInput,
+  query: EvidenceQuery,
+  cache: MtimeCache,
+  pulls: readonly PullSummary[],
+): Promise<SearchEvidenceResult> {
+  const sortKey = input.source.sortKey;
+  if (sortKey === undefined) {
+    // Defensive — should never happen given the caller's branch.
+    throw new Error("runSortPath called with sortKey undefined");
+  }
+
+  const decoded =
+    input.cursor !== null
+      ? decodeCursor(input.cursor, {
+          runId: input.runId,
+          sourceId: input.source.id,
+          runDir: input.runDir,
+          cache,
+        })
+      : null;
+  if (decoded !== null && decoded.kind !== "sort") {
+    throw new ToolDomainError(
+      "invalid_cursor",
+      `cursor kind '${decoded.kind}' does not match source '${input.source.id}' iteration mode (sort)`,
+      {},
+    );
+  }
+  const resumeAfter = decoded?.cursor.sortKey ?? null;
+
+  const localFiles = sortedLocalFiles(cache);
+  let filesScanned = 0;
+  let recordsScanned = 0;
+  const collected: ParsedRecord[] = [];
+  for (const localPath of localFiles) {
+    filesScanned++;
+    const text = await readFile(localPath, "utf8");
+    const lines = text.split("\n");
+    for (const line of lines) {
+      if (line === "") continue;
+      recordsScanned++;
+      const rec = input.source.parseLine(line);
+      if (rec === null) continue;
+      if (!input.source.matchQuery(rec, query)) continue;
+      collected.push(rec);
+    }
+  }
+
+  const sorted = collected
+    .map((rec) => ({ rec, key: sortKey(rec) }))
+    .sort((a, b) => compareSortKeys(a.key, b.key));
+
+  // Resume past the cursor's key (strictly greater).
+  let startIdx = 0;
+  if (resumeAfter !== null) {
+    while (startIdx < sorted.length) {
+      const entry = sorted[startIdx];
+      if (entry === undefined) break;
+      if (compareSortKeys(entry.key, resumeAfter) > 0) break;
+      startIdx++;
+    }
+  }
+
+  const pageEnd = Math.min(sorted.length, startIdx + input.limit);
+  const pageRecords = sorted.slice(startIdx, pageEnd).map((e) => e.rec);
+  const lastInPage = pageEnd > startIdx ? sorted[pageEnd - 1] : undefined;
+  const hasMore = pageEnd < sorted.length;
+
+  const nextCursor =
+    hasMore && lastInPage !== undefined
+      ? encodeCursor({
+          kind: "sort",
+          runId: input.runId,
+          source: input.source.id,
+          sortKey: [...lastInPage.key],
+        })
+      : null;
+
+  return {
+    records: pageRecords,
+    nextCursor,
+    pulls,
+    statsRun: {
+      filesScanned,
+      recordsScanned,
       pullsTriggered: pulls.length,
       pulledFiles: pulls.map((p) => p.localPath),
     },

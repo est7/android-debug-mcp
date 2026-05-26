@@ -367,6 +367,7 @@ describe("search_evidence — cursor integrity", () => {
     });
     const tampered = Buffer.from(
       JSON.stringify({
+        kind: "stream",
         runId: "INTRUDER",
         source: "fake_src",
         fileKey: "http_a.jsonl",

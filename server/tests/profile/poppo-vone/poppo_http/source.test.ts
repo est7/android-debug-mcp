@@ -1,0 +1,188 @@
+import { describe, expect, it } from "vitest";
+import {
+  poppoHttpSource,
+  shouldKeepByFilenameDate,
+} from "../../../../src/profile/poppo-vone/poppo_http/source.ts";
+import type {
+  EvidenceContext,
+  EvidenceQuery,
+  ParsedRecord,
+} from "../../../../src/profile/types.ts";
+
+/**
+ * Unit tests for the poppo_http EvidenceSource — the pure paths only.
+ * `listDeviceFiles` + `pullFile` need a live adb mock; those are exercised
+ * by the search_evidence integration test (Phase 4 task (h)).
+ */
+
+const CTX_TYPICAL: EvidenceContext = {
+  deviceSerial: "DEV0",
+  packageName: "com.baitu.poppo",
+  sessionStartMs: new Date("2026-05-26T05:30:00Z").getTime(),
+  deviceTimezone: "Asia/Shanghai",
+};
+
+describe("shouldKeepByFilenameDate — filename-date filter with 1-day buffer", () => {
+  it("rejects non-matching filenames", () => {
+    expect(
+      shouldKeepByFilenameDate("vlog_2026-05-26.log", CTX_TYPICAL.sessionStartMs, "Asia/Shanghai"),
+    ).toBe(false);
+    expect(shouldKeepByFilenameDate("README.md", CTX_TYPICAL.sessionStartMs, "Asia/Shanghai")).toBe(
+      false,
+    );
+  });
+
+  it("keeps current local-date file (Shanghai = UTC+8)", () => {
+    // 2026-05-26 05:30 UTC = 2026-05-26 13:30 Shanghai → local date 2026-05-26
+    expect(
+      shouldKeepByFilenameDate(
+        "http_2026-05-26_0.jsonl",
+        CTX_TYPICAL.sessionStartMs,
+        "Asia/Shanghai",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps yesterday-local file via 1-day buffer", () => {
+    expect(
+      shouldKeepByFilenameDate(
+        "http_2026-05-25_3.jsonl",
+        CTX_TYPICAL.sessionStartMs,
+        "Asia/Shanghai",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects too-old file (more than 1 day before session-local-date)", () => {
+    expect(
+      shouldKeepByFilenameDate(
+        "http_2026-05-24_0.jsonl",
+        CTX_TYPICAL.sessionStartMs,
+        "Asia/Shanghai",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps future-dated file (session straddles midnight → tomorrow allowed)", () => {
+    expect(
+      shouldKeepByFilenameDate(
+        "http_2026-05-27_0.jsonl",
+        CTX_TYPICAL.sessionStartMs,
+        "Asia/Shanghai",
+      ),
+    ).toBe(true);
+  });
+
+  it("skips filtering when deviceTimezone is null — keeps all matching filenames", () => {
+    expect(
+      shouldKeepByFilenameDate("http_2020-01-01_0.jsonl", CTX_TYPICAL.sessionStartMs, null),
+    ).toBe(true);
+    expect(
+      shouldKeepByFilenameDate("http_2030-01-01_99.jsonl", CTX_TYPICAL.sessionStartMs, null),
+    ).toBe(true);
+  });
+
+  it("skips filtering when timezone is an unparseable string — fail-open", () => {
+    expect(
+      shouldKeepByFilenameDate(
+        "http_2020-01-01_0.jsonl",
+        CTX_TYPICAL.sessionStartMs,
+        "Not/A/Real/Zone",
+      ),
+    ).toBe(true);
+  });
+});
+
+/** Type-narrow the optional methods so each test calls them directly. */
+function bindSession(query: EvidenceQuery, ctx: EvidenceContext): EvidenceQuery {
+  const fn = poppoHttpSource.bindSession;
+  if (fn === undefined) throw new Error("poppoHttpSource.bindSession must be defined");
+  return fn(query, ctx);
+}
+function sortKey(record: ParsedRecord): readonly (string | number)[] {
+  const fn = poppoHttpSource.sortKey;
+  if (fn === undefined) throw new Error("poppoHttpSource.sortKey must be defined");
+  return fn(record);
+}
+
+describe("poppoHttpSource — bindSession (codex Phase 4 audit R1)", () => {
+  it("injects sessionStartMs floor when agent did not provide tsMsRange.from", () => {
+    const bound = bindSession({ source: "poppo_http" } as EvidenceQuery, CTX_TYPICAL);
+    const tsMsRange = (bound as { tsMsRange?: { from?: number; to?: number } }).tsMsRange;
+    expect(tsMsRange?.from).toBe(CTX_TYPICAL.sessionStartMs);
+  });
+
+  it("raises agent's tsMsRange.from to session floor when lower", () => {
+    const userFrom = CTX_TYPICAL.sessionStartMs - 86_400_000; // a day before session
+    const bound = bindSession(
+      { source: "poppo_http", tsMsRange: { from: userFrom } } as EvidenceQuery,
+      CTX_TYPICAL,
+    );
+    const tsMsRange = (bound as { tsMsRange?: { from?: number; to?: number } }).tsMsRange;
+    expect(tsMsRange?.from).toBe(CTX_TYPICAL.sessionStartMs);
+  });
+
+  it("preserves agent's tsMsRange.from when already at or above floor", () => {
+    const userFrom = CTX_TYPICAL.sessionStartMs + 10_000;
+    const bound = bindSession(
+      { source: "poppo_http", tsMsRange: { from: userFrom } } as EvidenceQuery,
+      CTX_TYPICAL,
+    );
+    const tsMsRange = (bound as { tsMsRange?: { from?: number; to?: number } }).tsMsRange;
+    expect(tsMsRange?.from).toBe(userFrom);
+  });
+
+  it("preserves agent's tsMsRange.to (only `from` is clamped)", () => {
+    const bound = bindSession(
+      {
+        source: "poppo_http",
+        tsMsRange: { to: CTX_TYPICAL.sessionStartMs + 60_000 },
+      } as EvidenceQuery,
+      CTX_TYPICAL,
+    );
+    const tsMsRange = (bound as { tsMsRange?: { from?: number; to?: number } }).tsMsRange;
+    expect(tsMsRange?.to).toBe(CTX_TYPICAL.sessionStartMs + 60_000);
+    expect(tsMsRange?.from).toBe(CTX_TYPICAL.sessionStartMs);
+  });
+});
+
+describe("poppoHttpSource — sortKey (codex Phase 4 audit R2)", () => {
+  it("returns [tsMs, runId, seq] in schema-canonical order", () => {
+    const record: ParsedRecord = {
+      source: "poppo_http",
+      tsMs: 1_716_600_000_000,
+      runId: "1779260470000_18866",
+      seq: 42,
+    };
+    expect(sortKey(record)).toEqual([1_716_600_000_000, "1779260470000_18866", 42]);
+  });
+});
+
+describe("poppoHttpSource — id + querySchema discriminator", () => {
+  it("id is 'poppo_http'", () => {
+    expect(poppoHttpSource.id).toBe("poppo_http");
+  });
+
+  it("querySchema is strict on the source literal", () => {
+    expect(() => poppoHttpSource.querySchema.parse({ source: "other_src" })).toThrow();
+  });
+
+  it("querySchema rejects unknown top-level keys", () => {
+    expect(() => poppoHttpSource.querySchema.parse({ source: "poppo_http", junk: 1 })).toThrow();
+  });
+
+  it("querySchema accepts a fully-populated query", () => {
+    const parsed = poppoHttpSource.querySchema.parse({
+      source: "poppo_http",
+      pathPrefix: "/users",
+      methodIn: ["GET", "POST"],
+      outcome: "app_error",
+      excludeHeartbeat: true,
+      tsMsRange: { from: 1000, to: 2000 },
+      hostContains: "test-api",
+      durationMsGte: 500,
+      errorTypeIn: ["java.net.SocketTimeoutException"],
+    });
+    expect(parsed.source).toBe("poppo_http");
+  });
+});

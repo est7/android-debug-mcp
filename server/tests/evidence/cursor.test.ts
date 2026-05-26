@@ -28,17 +28,27 @@ const cache = withCache(goodLocal);
 
 const ctx = { runId: "run-1", sourceId: SOURCE_ID, runDir: RUN_DIR, cache };
 
-describe("encodeCursor", () => {
-  it("round-trips a well-formed cursor", () => {
-    const c = { runId: "run-1", source: SOURCE_ID, fileKey: FILE_KEY, lineOffset: 12 };
+describe("encodeCursor — stream variant", () => {
+  it("round-trips a well-formed stream cursor", () => {
+    const c = {
+      kind: "stream" as const,
+      runId: "run-1",
+      source: SOURCE_ID,
+      fileKey: FILE_KEY,
+      lineOffset: 12,
+    };
     const out = decodeCursor(encodeCursor(c), ctx);
-    expect(out.cursor).toEqual(c);
-    expect(out.localPath).toBe(goodLocal);
+    expect(out.kind).toBe("stream");
+    if (out.kind === "stream") {
+      expect(out.cursor).toEqual(c);
+      expect(out.localPath).toBe(goodLocal);
+    }
   });
 
-  it("refuses to emit a cursor with a path-separator in fileKey", () => {
+  it("refuses to emit a stream cursor with a path-separator in fileKey", () => {
     expect(() =>
       encodeCursor({
+        kind: "stream",
         runId: "run-1",
         source: SOURCE_ID,
         fileKey: "a/b",
@@ -47,13 +57,52 @@ describe("encodeCursor", () => {
     ).toThrow();
   });
 
-  it("refuses to emit a cursor with negative lineOffset", () => {
+  it("refuses to emit a stream cursor with negative lineOffset", () => {
     expect(() =>
       encodeCursor({
+        kind: "stream",
         runId: "run-1",
         source: SOURCE_ID,
         fileKey: FILE_KEY,
         lineOffset: -1,
+      }),
+    ).toThrow();
+  });
+});
+
+describe("encodeCursor — sort variant (Phase 4)", () => {
+  it("round-trips a well-formed sort cursor", () => {
+    const c = {
+      kind: "sort" as const,
+      runId: "run-1",
+      source: SOURCE_ID,
+      sortKey: [1_716_600_000_000, "run-abc-123", 42] as (string | number)[],
+    };
+    const out = decodeCursor(encodeCursor(c), ctx);
+    expect(out.kind).toBe("sort");
+    if (out.kind === "sort") {
+      expect(out.cursor.sortKey).toEqual([1_716_600_000_000, "run-abc-123", 42]);
+    }
+  });
+
+  it("refuses to emit a sort cursor with empty sortKey", () => {
+    expect(() =>
+      encodeCursor({
+        kind: "sort",
+        runId: "run-1",
+        source: SOURCE_ID,
+        sortKey: [],
+      }),
+    ).toThrow();
+  });
+
+  it("refuses to emit a sort cursor exceeding the length cap (16)", () => {
+    expect(() =>
+      encodeCursor({
+        kind: "sort",
+        runId: "run-1",
+        source: SOURCE_ID,
+        sortKey: Array.from({ length: 17 }, (_, i) => i),
       }),
     ).toThrow();
   });
@@ -91,6 +140,7 @@ describe("decodeCursor — defenses", () => {
   it("rejects a cursor with an extra key (.strict())", () => {
     const bad = Buffer.from(
       JSON.stringify({
+        kind: "stream",
         runId: "run-1",
         source: SOURCE_ID,
         fileKey: FILE_KEY,
@@ -104,7 +154,13 @@ describe("decodeCursor — defenses", () => {
 
   it("rejects cross-run misuse (runId mismatch)", () => {
     const bad = Buffer.from(
-      JSON.stringify({ runId: "OTHER-RUN", source: SOURCE_ID, fileKey: FILE_KEY, lineOffset: 0 }),
+      JSON.stringify({
+        kind: "stream",
+        runId: "OTHER-RUN",
+        source: SOURCE_ID,
+        fileKey: FILE_KEY,
+        lineOffset: 0,
+      }),
       "utf8",
     ).toString("base64");
     expectInvalidCursor(() => decodeCursor(bad, ctx), "runId mismatch");
@@ -113,6 +169,7 @@ describe("decodeCursor — defenses", () => {
   it("rejects cross-source misuse (source mismatch)", () => {
     const bad = Buffer.from(
       JSON.stringify({
+        kind: "stream",
         runId: "run-1",
         source: "other_src",
         fileKey: FILE_KEY,
@@ -126,6 +183,7 @@ describe("decodeCursor — defenses", () => {
   it("rejects fileKey containing a path separator (regex)", () => {
     const bad = Buffer.from(
       JSON.stringify({
+        kind: "stream",
         runId: "run-1",
         source: SOURCE_ID,
         fileKey: "../escape.jsonl",
@@ -139,6 +197,7 @@ describe("decodeCursor — defenses", () => {
   it("rejects fileKey containing a backslash (regex)", () => {
     const bad = Buffer.from(
       JSON.stringify({
+        kind: "stream",
         runId: "run-1",
         source: SOURCE_ID,
         fileKey: "..\\escape.jsonl",
@@ -152,6 +211,7 @@ describe("decodeCursor — defenses", () => {
   it("rejects fileKey that is not in the mtime cache (post-resolve)", () => {
     const bad = Buffer.from(
       JSON.stringify({
+        kind: "stream",
         runId: "run-1",
         source: SOURCE_ID,
         fileKey: "never-pulled.jsonl",
@@ -170,6 +230,7 @@ describe("decodeCursor — defenses", () => {
     // loosening cannot open this hole.
     const bad = Buffer.from(
       JSON.stringify({
+        kind: "stream",
         runId: "run-1",
         source: SOURCE_ID,
         fileKey: "..",
@@ -178,5 +239,71 @@ describe("decodeCursor — defenses", () => {
       "utf8",
     ).toString("base64");
     expectInvalidCursor(() => decodeCursor(bad, ctx), "resolves outside");
+  });
+});
+
+describe("decodeCursor — sort variant (Phase 4)", () => {
+  function expectInvalidCursor(fn: () => unknown, fragment?: string) {
+    let caught: unknown;
+    try {
+      fn();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ToolDomainError);
+    const err = caught as ToolDomainError;
+    expect(err.code).toBe("invalid_cursor");
+    if (fragment !== undefined) expect(err.message).toContain(fragment);
+  }
+
+  it("rejects non-primitive elements in sortKey", () => {
+    const bad = Buffer.from(
+      JSON.stringify({
+        kind: "sort",
+        runId: "run-1",
+        source: SOURCE_ID,
+        sortKey: [1, { evil: true }],
+      }),
+      "utf8",
+    ).toString("base64");
+    expectInvalidCursor(() => decodeCursor(bad, ctx), "shape invalid");
+  });
+
+  it("rejects boolean / null elements", () => {
+    const bad = Buffer.from(
+      JSON.stringify({
+        kind: "sort",
+        runId: "run-1",
+        source: SOURCE_ID,
+        sortKey: [1, null],
+      }),
+      "utf8",
+    ).toString("base64");
+    expectInvalidCursor(() => decodeCursor(bad, ctx), "shape invalid");
+  });
+
+  it("rejects cross-run misuse on sort variant too", () => {
+    const bad = Buffer.from(
+      JSON.stringify({
+        kind: "sort",
+        runId: "OTHER-RUN",
+        source: SOURCE_ID,
+        sortKey: [1, "x", 0],
+      }),
+      "utf8",
+    ).toString("base64");
+    expectInvalidCursor(() => decodeCursor(bad, ctx), "runId mismatch");
+  });
+
+  it("rejects unknown kind discriminator", () => {
+    const bad = Buffer.from(
+      JSON.stringify({
+        kind: "unknown_variant",
+        runId: "run-1",
+        source: SOURCE_ID,
+      }),
+      "utf8",
+    ).toString("base64");
+    expectInvalidCursor(() => decodeCursor(bad, ctx), "shape invalid");
   });
 });

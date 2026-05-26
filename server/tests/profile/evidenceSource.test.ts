@@ -80,6 +80,7 @@ function makeFake(opts: {
 
 const ctx: EvidenceContext = {
   deviceSerial: "DEV0",
+  packageName: "com.example.fake",
   sessionStartMs: 1_716_600_000_000,
   deviceTimezone: "Asia/Shanghai",
 };

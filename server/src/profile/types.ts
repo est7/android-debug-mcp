@@ -34,6 +34,15 @@ export type ProfileJson = z.output<typeof ProfileJsonSchema>;
 export interface EvidenceContext {
   /** ADB device serial. Sources pass this through to `adb -s <serial> ...`. */
   readonly deviceSerial: string;
+  /**
+   * Resolved Android package name of the session. Sources that read from
+   * the app's external files dir (`/sdcard/Android/data/<pkg>/files/...`)
+   * use this to compose the device path. Phase 4 amendment — added when
+   * the first concrete source (`poppo_http`) needed a per-app device path
+   * (Poppo vs Vone share the source's logic but read from different package
+   * dirs).
+   */
+  readonly packageName: string;
   /** Epoch ms of session start; left edge of the lazy-pull time window (Q5+). */
   readonly sessionStartMs: number;
   /**
@@ -172,6 +181,66 @@ export interface EvidenceSource {
    * Phase 4's concrete impl can carry source-specific masking nuances.
    */
   redactForBundle(record: ParsedRecord): ParsedRecord;
+
+  /**
+   * OPTIONAL — Phase 4 amendment (codex audit R1).
+   *
+   * Decorate the agent's query with session-bound defaults before
+   * `matchQuery` sees it. Called once per `searchEvidence` invocation
+   * after dispatch + before iteration. Implementations are pure: they
+   * may merge fields, raise floor values, or clamp ranges; they MUST
+   * NOT touch I/O.
+   *
+   * Motivating case: `poppo_http`'s `http_*.jsonl` retention is up to 3
+   * days / 100 MiB and a single file can contain multiple app process
+   * runs (per the schema's "运行与文件" section). Without an implicit
+   * lower bound, `search_evidence({source:"poppo_http"})` would leak
+   * records from previous app runs into the current MCP session. So
+   * `poppo_http.bindSession` raises `query.tsMsRange.from` to at least
+   * `ctx.sessionStartMs`.
+   *
+   * If unset, runtime uses the agent's query verbatim.
+   */
+  bindSession?(query: EvidenceQuery, ctx: EvidenceContext): EvidenceQuery;
+
+  /**
+   * OPTIONAL — Phase 4 amendment (codex audit R2).
+   *
+   * Return a lexicographically comparable key for `record`. When set,
+   * the runtime collects every matched record, sorts the buffer by
+   * lex-comparing per-record `sortKey()` outputs, then paginates via a
+   * keyset cursor (cursor.ts `{kind:"sort"}` variant). When unset, the
+   * runtime keeps its streaming file-then-line iteration (cursor.ts
+   * `{kind:"stream"}` variant).
+   *
+   * The returned tuple MUST contain only `string | number` primitives —
+   * cursor integrity validates the shape after a round-trip. Tuple
+   * length should be stable across calls; runtime compares
+   * element-by-element using JavaScript's standard `<` so types must
+   * match position-by-position (don't mix string and number in the
+   * same slot).
+   *
+   * # Stable + unique requirement (codex Phase 4 audit Q)
+   *
+   * Sortable sources MUST return a tuple that is UNIQUE per record
+   * within any single `searchEvidence` call. The runtime's keyset
+   * resume rule is `compareSortKeys(rec, cursor.sortKey) > 0` (strict
+   * greater-than) — two records sharing the same sortKey on either
+   * side of a page boundary would cause the later one to be silently
+   * skipped. For `poppo_http`, `(tsMs, runId, seq)` satisfies this
+   * because `(runId, seq)` is the schema's stable primary key.
+   *
+   * Motivating case: `poppo_http` returns `[record.tsMs, record.runId,
+   * record.seq]` — matches the schema's reader contract
+   * "sort by (tsMs, runId, seq)" (§ MCP 消费指南).
+   *
+   * Live append-only caveat: keyset pagination over append-only
+   * evidence is not a snapshot — a record with `tsMs` below the last
+   * page's cursor written between pages cannot be returned on a later
+   * page. Snapshot consistency requires `stop_session` seal-pull
+   * (Phase 5 `collect_bundle`) or a future explicit snapshot mode.
+   */
+  sortKey?(record: ParsedRecord): readonly (string | number)[];
 }
 
 /**

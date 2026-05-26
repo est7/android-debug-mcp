@@ -95,6 +95,7 @@ function makeFakeSource(opts: {
 
 const ctx: EvidenceContext = {
   deviceSerial: "DEV0",
+  packageName: "com.example.fake",
   sessionStartMs: 1_716_600_000_000,
   deviceTimezone: "Asia/Shanghai",
 };
@@ -371,6 +372,7 @@ describe("searchEvidence — pagination", () => {
     };
     void cache;
     const tampered = encodeCursor({
+      kind: "stream",
       runId: "OTHER",
       source: "fake_src",
       fileKey: "a.jsonl",

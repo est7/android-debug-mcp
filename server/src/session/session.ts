@@ -99,6 +99,7 @@ export class Session {
   evidenceContext(): EvidenceContext {
     return {
       deviceSerial: this.deviceSerial,
+      packageName: this.packageName,
       sessionStartMs: this.startedAt.getTime(),
       deviceTimezone: this.deviceTimezone,
     };
