@@ -9,6 +9,7 @@ export default defineConfig({
       "android-mcp-server/**",
       "Android-MCP/**",
     ],
+    setupFiles: ["server/tests/setup.ts"],
     passWithNoTests: true,
   },
 });
