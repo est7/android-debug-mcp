@@ -78,6 +78,20 @@ A run folder is `<runRoot>/<package>/u<userId>/<runId>/` and holds
 `metadata.json`, `events.jsonl`, `commands.jsonl`, `logcat.jsonl`,
 `logcat.raw.txt`, `crash.jsonl`, `summary.md`, and an `artifacts/` directory.
 
+### Run index — `ANDROID_DEBUG_MCP_INDEX_ROOT` (optional, v0.4.1+)
+
+Each `start_session` also writes a symlink at
+`~/.android-debug-mcp/run-index/<runId>` → real runDir. Evidence tools use
+this index to find a run after stop, even when the lookup-time `runRoot`
+resolves differently from the run-creation-time `runRoot` (e.g. a tool call
+from a cwd whose git toplevel differs from the original `projectRoot`). The
+index is identity-checked (`metadata.runId` must match) and a missing /
+invalid entry falls back to scanning the current `runRoot`.
+
+Set `ANDROID_DEBUG_MCP_INDEX_ROOT` only to move the index off `$HOME` — e.g.
+park it on a different volume, or isolate it per-workspace. Default
+(`~/.android-debug-mcp/run-index/`) is correct for almost all users.
+
 ## The 19 tools
 
 Every tool is named `android_debug_*`. On **success** it returns
