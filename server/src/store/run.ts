@@ -1,5 +1,6 @@
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { createLogger } from "../mcp/log.ts";
 import {
   assertSafeDeviceSerial,
   assertSafePackageName,
@@ -15,6 +16,9 @@ import {
   writeMetadata,
 } from "./metadata.ts";
 import type { RunRootSource } from "./paths.ts";
+import { writeRunIndex } from "./runIndex.ts";
+
+const log = createLogger("store:run");
 
 export interface RunFolderInput {
   readonly runRoot: string;
@@ -72,6 +76,19 @@ export async function createRunDir(input: RunFolderInput): Promise<RunFolder> {
   const artifactsDir = join(runDir, "artifacts");
   await mkdir(artifactsDir, { recursive: true });
   const metadata = await writeMetadata(runDir, initialMetadata(input));
+  // Best-effort: register in the host-global run-index so cross-runRoot
+  // lookups can find this run after it stops (§ 1.1-D backlog). A symlink
+  // write that fails (read-only FS, EACCES, ...) degrades only the
+  // cross-runRoot path — the run itself is intact.
+  try {
+    await writeRunIndex(input.runId, runDir);
+  } catch (err) {
+    log.warn("run-index write failed; cross-runRoot lookup will fall back to scan", {
+      runId: input.runId,
+      runDir,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   const streams = await openStreams(runDir);
   return makeFolder(runDir, artifactsDir, metadata, streams);
 }

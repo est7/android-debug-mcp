@@ -4,6 +4,7 @@ import { ToolDomainError } from "../mcp/toolError.ts";
 import type { SessionManager } from "../session/manager.ts";
 import { METADATA_FILENAME, type Metadata, readMetadata } from "./metadata.ts";
 import { resolveRunRoot } from "./paths.ts";
+import { readRunIndex } from "./runIndex.ts";
 
 export interface RunEntry {
   readonly runDir: string;
@@ -19,15 +20,23 @@ export interface RunEntry {
  * carries no package / userId, so a finalized run can only be found by walking
  * `<runRoot>/<package>/u<userId>/<runId>/`.
  *
- * Active sessions are matched first — cheap, and authoritative for their
- * runDir regardless of which runRoot they were created under. Otherwise the
- * *current* runRoot is scanned: a run created under a different runRoot is not
- * found, which is acceptable for v1 (the runRoot is stable within a deployment).
+ * Resolution order:
+ *   1. Active sessions — cheap, authoritative for their runDir regardless of
+ *      which runRoot the session was created under.
+ *   2. Host-global run-index (`~/.android-debug-mcp/run-index/<runId>`) —
+ *      O(1) symlink lookup that survives cwd / runRoot changes (§ 1.1-D).
+ *      Registered best-effort at {@link createRunDir} time; dangling /
+ *      stale entries fall through silently.
+ *   3. Scan the *current* {@link resolveRunRoot} tree — backward-compat for
+ *      runs created before the index existed, and a safety net if the
+ *      symlink write failed.
  */
 export async function resolveRunDir(manager: SessionManager, runId: string): Promise<string> {
   for (const session of manager.listActive()) {
     if (session.runId === runId) return session.runDir;
   }
+  const indexed = await readRunIndex(runId);
+  if (indexed !== null) return indexed;
   const { runRoot } = resolveRunRoot();
   const found = await scanForRun(runRoot, runId);
   if (found !== null) return found;
