@@ -2,10 +2,8 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { captureUiDump } from "../../adb/capture.ts";
 import type { SessionManager } from "../../session/manager.ts";
-import { UiHierarchyParseError, parseUiHierarchy } from "../../ui/hierarchy.ts";
-import { collectElements } from "../../ui/list_elements.ts";
+import { CollectElementsError, collectCurrentElements } from "../../ui/list_elements.ts";
 import { registerDebugTool } from "../register.ts";
 import { ToolDomainError } from "../toolError.ts";
 import { ok, requireConnectedSession, runIdInput, touch } from "./_shared.ts";
@@ -104,26 +102,16 @@ export function registerListElements(server: McpServer, manager: SessionManager)
       const captureId = randomBytes(6).toString("hex");
       const uiDumpPath = join(session.runDir, "artifacts", `ui-${captureId}.xml`);
 
-      const dump = await captureUiDump(session.deviceSerial, uiDumpPath);
-      if (!dump.ok || dump.xml === null) {
-        throw new ToolDomainError("ui_dump_failed", `uiautomator dump failed: ${dump.detail}`, {
-          runId: input.runId,
-        });
-      }
-
-      let elements: ReturnType<typeof collectElements>;
+      let elements: Awaited<ReturnType<typeof collectCurrentElements>>["elements"];
       let windowCount: number;
       try {
-        const roots = parseUiHierarchy(dump.xml);
-        windowCount = roots.length;
-        elements = collectElements(roots);
+        ({ elements, windowCount } = await collectCurrentElements(
+          session.deviceSerial,
+          uiDumpPath,
+        ));
       } catch (err) {
-        if (err instanceof UiHierarchyParseError) {
-          throw new ToolDomainError(
-            "ui_dump_failed",
-            `UI hierarchy was unparseable: ${err.message}`,
-            { runId: input.runId },
-          );
+        if (err instanceof CollectElementsError) {
+          throw new ToolDomainError("ui_dump_failed", err.detail, { runId: input.runId });
         }
         throw err;
       }

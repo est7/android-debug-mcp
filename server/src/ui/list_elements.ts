@@ -10,7 +10,8 @@
  * emit before their containers, matching mobile-mcp.
  */
 
-import type { UiNode } from "./hierarchy.ts";
+import { captureUiDump } from "../adb/capture.ts";
+import { UiHierarchyParseError, type UiNode, parseUiHierarchy } from "./hierarchy.ts";
 
 /**
  * One row of the `list_elements` tool result. Distinct from v2-A `Node`:
@@ -106,4 +107,49 @@ function toElement(node: UiNode, windowIndex: number): Element {
     // schema: "当 node.checkable=true 且 node.checked=true").
     ...(node.checkable && node.checked ? { checked: true as const } : {}),
   };
+}
+
+/** Typed failure of {@link collectCurrentElements}. Callers map `code` to their own tool-specific error. */
+export class CollectElementsError extends Error {
+  readonly code: "ui_dump_failed";
+  readonly detail: string;
+  constructor(detail: string) {
+    super(detail);
+    this.name = "CollectElementsError";
+    this.code = "ui_dump_failed";
+    this.detail = detail;
+  }
+}
+
+/**
+ * Shared `dump → parse → collect` recipe used by both the `list_elements` tool
+ * and `capture({annotateElements:true})`. Pure function: writes the dump XML
+ * to `uiDumpPath` (caller owns path / captureId), parses it, returns
+ * `{elements, windowCount, xml}`. Throws {@link CollectElementsError} on
+ * dump-side failure; callers map to their tool-domain error type.
+ *
+ * v2-F.1 design lock § Open implementation decisions — codex round 2 #4
+ * constrained the boundary:
+ *   - Handler mints `captureId` / `uiDumpPath` / appendCommand / appendEvent.
+ *   - Helper only performs `captureUiDump → parseUiHierarchy → collectElements`.
+ *   - Never invokes the registered `list_elements` tool handler (event /
+ *     privacy semantics belong to the calling tool).
+ */
+export async function collectCurrentElements(
+  deviceSerial: string,
+  uiDumpPath: string,
+): Promise<{ readonly elements: Element[]; readonly windowCount: number; readonly xml: string }> {
+  const dump = await captureUiDump(deviceSerial, uiDumpPath);
+  if (!dump.ok || dump.xml === null) {
+    throw new CollectElementsError(`uiautomator dump failed: ${dump.detail}`);
+  }
+  try {
+    const roots = parseUiHierarchy(dump.xml);
+    return { elements: collectElements(roots), windowCount: roots.length, xml: dump.xml };
+  } catch (err) {
+    if (err instanceof UiHierarchyParseError) {
+      throw new CollectElementsError(`UI hierarchy was unparseable: ${err.message}`);
+    }
+    throw err;
+  }
 }
