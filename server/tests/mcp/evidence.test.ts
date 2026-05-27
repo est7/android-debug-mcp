@@ -239,6 +239,72 @@ describe("search_logs tool", () => {
     expect(JSON.parse(callText(r)).error).toBe("query_underspecified");
   });
 
+  it("cursor alone is NOT narrowing — closes the rc.3 fetch-all bypass (codex v0.4.0 audit)", async () => {
+    // Regression for the codex-found bypass: the cursor codec carries only
+    // `{offset, scanned}` (server/src/search/cursor.ts), so a hand-crafted
+    // base64 cursor with no filter would bypass Block A entirely if the
+    // handler accepted cursor as proof of narrowing. The fix removes cursor
+    // from the narrowing predicate; this test pins that behavior.
+    const h = await harness();
+    const { runId, runDir } = await startRun(h);
+    writeFileSync(
+      join(runDir, "logcat.jsonl"),
+      `${JSON.stringify(LOG_E)}\n${JSON.stringify({ ...LOG_E, rawLineNo: 2 })}\n`,
+    );
+    const handCraftedCursor = Buffer.from(
+      JSON.stringify({ offset: 0, scanned: 0 }),
+      "utf8",
+    ).toString("base64");
+    const r = await h.client.callTool({
+      name: "android_debug_search_logs",
+      arguments: { runId, cursor: handCraftedCursor },
+    });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(callText(r)).error).toBe("query_underspecified");
+  });
+
+  it("paginated narrowed call: first page narrowed → cursor; second page must repeat the filter", async () => {
+    // The "pass the same filter on every page" convention is now load-bearing
+    // (cursor can't carry filter state). First page WITH a positive filter
+    // returns nextCursor; a follow-up with the cursor BUT no filter rejects;
+    // a follow-up with cursor + same filter succeeds.
+    const h = await harness();
+    const { runId, runDir } = await startRun(h);
+    // 4 lines, all level=E so `level:"E"` matches everything; limit:2 forces nextCursor.
+    writeFileSync(
+      join(runDir, "logcat.jsonl"),
+      `${[1, 2, 3, 4].map((n) => JSON.stringify({ ...LOG_E, rawLineNo: n })).join("\n")}\n`,
+    );
+
+    // Page 1: narrowed → should return nextCursor.
+    const page1 = await h.client.callTool({
+      name: "android_debug_search_logs",
+      arguments: { runId, level: "E", limit: 2 },
+    });
+    expect(page1.isError).toBeFalsy();
+    const sc1 = structured(page1);
+    expect((sc1.entries as Array<unknown>).length).toBe(2);
+    expect(typeof sc1.nextCursor).toBe("string");
+    const realCursor = sc1.nextCursor as string;
+
+    // Page 2 attempt A: cursor WITHOUT the filter → must reject.
+    const page2NoFilter = await h.client.callTool({
+      name: "android_debug_search_logs",
+      arguments: { runId, cursor: realCursor },
+    });
+    expect(page2NoFilter.isError).toBe(true);
+    expect(JSON.parse(callText(page2NoFilter)).error).toBe("query_underspecified");
+
+    // Page 2 attempt B: cursor WITH the same filter → succeeds and returns the rest.
+    const page2WithFilter = await h.client.callTool({
+      name: "android_debug_search_logs",
+      arguments: { runId, level: "E", limit: 2, cursor: realCursor },
+    });
+    expect(page2WithFilter.isError).toBeFalsy();
+    const sc2 = structured(page2WithFilter);
+    expect((sc2.entries as Array<unknown>).length).toBe(2);
+  });
+
   it("returns run_missing for an unknown runId", async () => {
     const h = await harness();
     await startRun(h);

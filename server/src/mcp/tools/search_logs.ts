@@ -73,9 +73,9 @@ const description = [
   "Search a debug run's parsed logcat (`logcat.jsonl`), streaming and paginated.",
   "",
   "Use when: the agent needs log lines matching a pattern, a severity, or a window relative to a `mark_event` marker — for an active or a finalized run.",
-  "Args: `runId`; at least one of `query` / `level` / `sinceTs` / `beforeMark` / `afterMark` / `tags` (the call requires at least one narrowing filter — `buffer` and `excludeTags` alone do NOT count). `query` is a case-insensitive substring of the message; `level` is a severity threshold — `W` returns W/E/F; `buffer` (`main`/`system`/`crash`) defaults to `main`; `sinceTs` is a device-clock `MM-DD HH:MM:SS.mmm` prefix, kept lines `>=` it; `beforeMark` / `afterMark` name a `mark_event` mark — the logcat window before/after where that mark was placed; `tags` keeps only entries whose `tag` exactly matches one of these (case-sensitive); `excludeTags` drops entries whose `tag` matches (applied after `tags`); `limit` (1-500, default 100); `cursor` resumes a prior narrowed call.",
+  "Args: `runId`; at least one of `query` / `level` / `sinceTs` / `beforeMark` / `afterMark` / `tags` (the call requires at least one narrowing filter on EVERY call — `buffer`, `excludeTags`, and `cursor` alone do NOT count). `query` is a case-insensitive substring of the message; `level` is a severity threshold — `W` returns W/E/F; `buffer` (`main`/`system`/`crash`) defaults to `main`; `sinceTs` is a device-clock `MM-DD HH:MM:SS.mmm` prefix, kept lines `>=` it; `beforeMark` / `afterMark` name a `mark_event` mark — the logcat window before/after where that mark was placed; `tags` keeps only entries whose `tag` exactly matches one of these (case-sensitive); `excludeTags` drops entries whose `tag` matches (applied after `tags`); `limit` (1-500, default 100); `cursor` resumes pagination — pass the SAME positive filter from the first page on every subsequent page.",
   "Returns: `{entries[], scanned, matched, nextCursor?, truncated?, truncationMessage?}`. `nextCursor` present means more lines remain. `truncated` means one oversized log line had its message cut.",
-  "Errors: `run_missing` for an unknown runId; `invalid_cursor` for a malformed cursor; `mark_not_found` when `beforeMark` / `afterMark` names a mark not in the run.",
+  "Errors: `run_missing` for an unknown runId; `query_underspecified` when the call carries no positive narrowing filter (cursor / buffer / excludeTags alone do not count); `invalid_cursor` for a malformed cursor; `mark_not_found` when `beforeMark` / `afterMark` names a mark not in the run.",
 ].join("\n");
 
 export function registerSearchLogs(server: McpServer, manager: SessionManager): void {
@@ -98,22 +98,25 @@ export function registerSearchLogs(server: McpServer, manager: SessionManager): 
       // v0.4.0 Block A "no fetch-all": logcat is the noisiest stream in the
       // run; a no-filter call returns up to `limit` lines truncated by the
       // response char budget — still mostly noise to the agent. Require at
-      // least one positive narrowing field. `buffer` alone does NOT count
-      // (default `main` is already the largest buffer); `excludeTags` does
-      // NOT count (negative filter). A `cursor` carries the prior call's
-      // narrowing forward and is accepted as proof of narrowing.
+      // least one positive narrowing field on EVERY call, paginated or not.
+      // `buffer` alone does NOT count (default `main` is already the largest
+      // buffer); `excludeTags` does NOT count (negative filter). A `cursor`
+      // does NOT count either — the cursor codec (server/src/search/cursor.ts)
+      // carries `{offset, scanned}` only and binds no filter state, so a
+      // hand-crafted cursor would bypass the gate. The convention "pass the
+      // same filters across pages" (per the tool description) keeps page-2+
+      // calls narrowed; the gate fires the same way on each page.
       if (
         input.query === undefined &&
         input.level === undefined &&
         input.sinceTs === undefined &&
         input.beforeMark === undefined &&
         input.afterMark === undefined &&
-        input.tags === undefined &&
-        input.cursor === undefined
+        input.tags === undefined
       ) {
         throw new ToolDomainError(
           "query_underspecified",
-          "search_logs requires at least one narrowing filter: query, level, sinceTs, beforeMark, afterMark, or tags. buffer and excludeTags alone do not narrow.",
+          "search_logs requires at least one narrowing filter on every call: query, level, sinceTs, beforeMark, afterMark, or tags. buffer / excludeTags / cursor alone do not narrow; on paginated calls pass the same filter as the first page.",
           { tool: "search_logs" },
         );
       }
