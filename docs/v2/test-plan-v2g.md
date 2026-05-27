@@ -177,8 +177,14 @@ real adb.
 
 1. `android_debug_search_evidence`:
    ```json
-   { "runId": "<runId>", "query": { "source": "poppo_http", "excludeHeartbeat": true } }
+   { "runId": "<runId>", "query": { "source": "poppo_http", "tsMsRange": { "from": 0 }, "excludeHeartbeat": true } }
    ```
+   `tsMsRange.from:0` is clamped to `sessionStartMs` by the source's
+   `bindSession`, so behavior is "all session traffic"; the explicit
+   range satisfies v0.4.0 Block A's `validateNarrowingFilter`
+   ("bare {source}" is now `query_underspecified`). `excludeHeartbeat`
+   is still allowed alongside; it's a negative filter that only counts
+   when paired with a positive one.
 2. Capture the response:
    - `records.length` > 0
    - `statsRun.pullsTriggered` > 0 (first call → cache miss → pull)
@@ -232,6 +238,10 @@ Continue from S3 — session active, records available.
      "query": { "source": "poppo_http", "excludeHeartbeat": true }
    }
    ```
+   `extract_*_context` injects `tsMsRange` from the marker before
+   dispatch, so the v0.4.0 Block A narrowing check is auto-satisfied —
+   no need for an explicit positive filter here. `excludeHeartbeat`
+   alone IS valid in this tool for the same reason.
 2. Confirm:
    - `tsMsRange.from === Date(markerIsoTs).getTime() - 5000`
    - `tsMsRange.to === Date(markerIsoTs).getTime() + 5000`

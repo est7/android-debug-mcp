@@ -146,11 +146,23 @@ branchable extras。
 Gates: **722 → 730**(+8 new = bundle test 4 evidence redact + handler test 4
 error matrix)。
 
-## Phase 5 (ii) — Real-device acceptance + 0.4.0 tag(pending,user-driven)
+## Phase 5 (ii) — Real-device acceptance + v0.4.0 hardening(2026-05-26 done)
 
-8 scenario manual checklist:[`./test-plan-v2g.md`](./test-plan-v2g.md)。无新代码;
-acceptance pass 后 cut **0.4.0 tag** 覆盖 `v2-F.0 + v2-G + Poppo HTTP adapter`
-(backlog § "release 节奏")。
+8 scenario manual checklist:[`./test-plan-v2g.md`](./test-plan-v2g.md);per-scenario
+evidence ledger:[`./test-plan-v2g-evidence.md`](./test-plan-v2g-evidence.md)。
+
+Acceptance against `0.4.0-rc.1` 启动后 **S6 撞到一个真 v2-G 回归** + audit 又发现一个
+设计漏洞,共两轮 fix-then-rerun,落到 `0.4.0-rc.3`。8/8 全过后 `cut 0.4.0`(见 § Release)。
+
+| Commit | Phase | What |
+|---|---|---|
+| `a80e723` | 5 (ii) fix #1 | bundle evidence-redact stream cap option(rc.2)。`AppendStream.open(path, {maxLineBytes})`;bundle.ts 用它。trigger:Poppo lang.json record ~670 KB 撞 64 KB cap,collect_bundle 直接挂。 |
+| `d580f8d` | 5 (ii) fix #1 polish | 同上的 cap value 从 1 MiB 升 16 MiB(rc.2 polish)。社交直播类 app HTTP body 几百 KB 是常态;1 MiB 只剩 ~50% headroom,撞顶 = bundle 整个出不来。16 MiB 给 ~25x headroom 同时仍是"明显 bug"信号位。 |
+| `c5588db` | 5 (ii) fix #2 / Block A | "no fetch-all" 契约(rc.3,**BREAKING**)。audit 发现 `search_evidence` + `search_logs` 都可裸调一把捞;实测最坏 ~50 MB / 调用、单条 lang.json ~155k tokens。`EvidenceSource.validateNarrowingFilter` hook + `query_underspecified` typed error。`extract_*_context` 因自动注入 `tsMsRange` 不受影响。Block B(per-record preview)→ v2-G.1(`docs/backlog.md` § v2-G)。 |
+
+`0.4.0-rc.3` 通过 8/8 + 747 / 747 自动测 + typecheck / lint clean。`cut 0.4.0` 阻塞项
+只剩 (a) push 上述 3 个 commit + (b) optional codex review of fix #1 / fix #2 via orch
+(orch session `collab` was alive during the fix loop;可能需要 `/orch:rewake`)。
 
 ## Codex audit cadence(Q12 cadence A summary)
 
@@ -170,17 +182,19 @@ acceptance pass 后 cut **0.4.0 tag** 覆盖 `v2-F.0 + v2-G + Poppo HTTP adapter
 | Phase 2 (`fae127d`) | 599 (+32) | clean | clean |
 | Phase 3 (`00f1796`) | 650 (+51) | clean | clean |
 | Phase 4 (`b20fd78`) | 722 (+72) | clean | clean |
-| Phase 5 (i) (`42d048b`) | **730** (+8) | clean | clean |
+| Phase 5 (i) (`42d048b`) | 730 (+8) | clean | clean |
+| Phase 5 (ii) fix #1 (`a80e723` / `d580f8d`) | 732 (+2 jsonl + bundle regression) | clean | clean |
+| Phase 5 (ii) fix #2 / Block A (`c5588db`) | **747** (+15 narrowing-filter + handler-side) | clean | clean |
 
-All commits pass `bun run typecheck && bun run lint && bun run test`。Phase 5 (ii)
-acceptance attaches to this baseline。
+All commits pass `bun run typecheck && bun run lint && bun run test`。
 
 ## Release
 
-hold 0.4.0 tag 至 Phase 5 (ii) acceptance done。Final cut 覆盖:
+Final cut 覆盖:
 
 - v2-F.0(`list_elements` + `long_press` + 3 lock-level amendments)
 - v2-G(2 evidence tools + `poppo-vone` profile + `poppo_http` source + Q6 wiring)
+- v0.4.0 acceptance hardening(bundle evidence-redact cap option + "no fetch-all" 契约)
 - Poppo HTTP adapter(submodulepoppo 侧 `CustomHttpLoggingInterceptor` 已 land)
 
 Tag message 模板:
@@ -192,11 +206,16 @@ v0.4.0 — v2-F.0 element-driven interaction + v2-G profile/evidence
 1st reference profile (poppo-vone) + 1st reference source (poppo_http).
 collect_bundle Q6 evidence redact.
 
+BREAKING (v0.4.0 Block A): search_evidence + search_logs require at
+least one narrowing filter; bare {source} / bare {runId} now return
+query_underspecified.
+
 See:
   docs/v2/element-interaction.md           (v2-F.0 design lock)
   docs/v2/profile-and-evidence.md          (v2-G design lock)
   docs/v2/v2-g-implementation-plan.md      (5-phase breakdown)
   docs/v2/test-plan-v2g.md                 (real-device acceptance)
+  docs/v2/test-plan-v2g-evidence.md        (8-scenario evidence ledger)
 ```
 
 ## Out of scope(deferred)

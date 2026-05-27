@@ -112,6 +112,16 @@ Tool 层只校验 `query.source` 是字符串;source 校验自己的字段。
 handler 进入后通过 `queryDispatch.dispatchQuery` 用 `source.querySchema.strict().parse`
 做 per-source 严格校验。Q4 strict 精神保留(每个 source 仍 strict);Q11 soft-empty 不变。
 
+**v0.4.0 acceptance amendment(2026-05-26 audit)**:Q4 原文每个 source filter 都 `.optional()`,
+agent 可以发 `{source:"poppo_http"}` 一把捞全量(实测最坏 ~50 MB / 调用,单条 lang.json
+~622 KB ≈ 155k tokens)。新规:source 通过 `validateNarrowingFilter?(query) → string | null`
+钩子声明哪些字段算"正向 narrowing"(详见 § validateNarrowingFilter hook 小节)。bare
+`{source}` 与"只带 negative filter(`excludeHeartbeat`)"都拒,typed error 新码
+`query_underspecified`(distinct from `query_malformed` so agents branch on "add a filter"
+vs "fix field shape")。`extract_evidence_context` 自动注入 `tsMsRange`,豁免 narrowing
+要求 — 用法不变。`search_logs` 走 handler-side 等价检查(inputSchema 必须保持
+strict ZodObject,见 § G-4,refine 会变 ZodEffects)。
+
 ### Q5+ — 时间窗驱动 lazy pull
 
 - `sessionStartMs` 作 lazy-pull 时间窗左边界
@@ -263,6 +273,38 @@ Surfaced by search_evidence / extract_evidence_context when query 顶层 source 
 (resolved to a registered EvidenceSource)但 source-specific fields 失败 per-source
 strict zod validation。Distinct from `invalid_argument` so agents can branch on
 "source is real but my query shape is wrong" vs "missing top-level field".
+
+### EvidenceSource 加 `validateNarrowingFilter?(query): string | null`(v0.4.0 Block A)
+
+audit on 2026-05-26 against the principle "agent must not have fetch-all capability"
+找到两个违反者(`search_evidence` + `search_logs`);Block A 是阻塞 v0.4.0 tag 的修复。
+
+Source 实现这个钩子声明它要求 agent 至少传一个正向 narrowing 字段。`null` 表示"通过";
+非空 string 是直接面向 agent 的拒绝消息(handler 包装成 `query_underspecified`)。
+`poppo_http` 实现:`pathPrefix / methodIn / outcome / tsMsRange / hostContains / durationMsGte / errorTypeIn`
+任一即可。`excludeHeartbeat` 作为 negative filter 不算 — 它让所有非心跳记录穿过,
+仍是"session 内全量"。
+
+`extract_evidence_context` 在 dispatch 前注入 `{from, to}` 形态的 `tsMsRange`,自然满足条件。
+Agents 想要"某事件附近的记录"时应走 `extract_*_context`,不走 `search_evidence`。这条
+指引写进 `poppo_http.validateNarrowingFilter` 的错误消息里 — 错误消息本身就是 onboarding。
+
+`search_logs` 没有 source 分发层,直接在 handler 里检查 `query / level / sinceTs / beforeMark / afterMark / tags / cursor`
+至少一个(buffer 单独不算 — default `main` 已是最大池;excludeTags 单独不算 — negative)。
+typed error 同样是 `query_underspecified`。
+
+**未解决(deferred 到 v2-G.1)**:per-record size 仍无界(单条 lang.json ~622 KB ≈ 155k tokens)。
+Block B 设计需要 `EvidenceSource.previewForAgent?(record): {preview, truncated, fullSizeBytes}`,
+read tools 默认走 preview 模式,新加 `fullRecords: true` 让 agent 显式认账。跨 interface
++ 所有调用路径,需 codex grill。见 `docs/backlog.md` § v2-G 第 3 条技术债。
+
+### `query_underspecified` 新错码(v0.4.0 Block A)
+
+Surfaced by search_evidence(via source's `validateNarrowingFilter`)或 search_logs(handler-side
+直接检查)when the agent's query is shape-legal but carries no positive narrowing field.
+Branchable extras `{source: string}`(search_evidence)或 `{tool: "search_logs"}`(search_logs)。
+distinct from `query_malformed`:那个是"字段类型 / 未知 key 错";这个是"形状合法但 narrow
+不够,加个 filter"。
 
 ### `evidence_redaction_unavailable` 新错码(Phase 5 (i))
 

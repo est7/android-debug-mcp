@@ -18,8 +18,9 @@
 | [`v2/v2-f-implementation-plan.md`](./v2/v2-f-implementation-plan.md) | v2-F 实施计划(4 phase + 并行 + 风险 + 8 open decisions;codex 3 轮评审 sign-off) | locked 2026-05-25 |
 | [`v2/test-plan-v2f.md`](./v2/test-plan-v2f.md) | v2-F 6 scenario 真机 manual checklist + evidence ledger(含 scenario C multi-window 三件齐 退化分支) | Phase 3 落盘 2026-05-25 |
 | [`v2/profile-and-evidence.md`](./v2/profile-and-evidence.md) | v2-G 设计 lock(per-project profile + EvidenceSource adapter;Q1–Q12 + Phase 3/4/5 contract amendments;codex 4 轮 pre/post review sign-off) | locked 2026-05-26 |
-| [`v2/v2-g-implementation-plan.md`](./v2/v2-g-implementation-plan.md) | v2-G 实施计划(5 phase;`fae127d` Phase 2 → `42d048b` Phase 5 (i);730 / 730 gates green) | locked 2026-05-26 |
-| [`v2/test-plan-v2g.md`](./v2/test-plan-v2g.md) | v2-G 8 scenario 真机 manual checklist + evidence ledger(profile load / 损坏 / search happy / extract / lazy mtime hit / seal+bundle redact / release no-evidence / vanilla soft-empty) | Phase 5 (ii) 落盘 2026-05-26 |
+| [`v2/v2-g-implementation-plan.md`](./v2/v2-g-implementation-plan.md) | v2-G 实施计划(5 phase + Phase 5 (ii) acceptance hardening;`fae127d` → `c5588db`;747 / 747 gates green) | locked 2026-05-26 |
+| [`v2/test-plan-v2g.md`](./v2/test-plan-v2g.md) | v2-G 8 scenario 真机 manual checklist(profile load / 损坏 / search happy / extract / lazy mtime hit / seal+bundle redact / release no-evidence / vanilla soft-empty) | Phase 5 (ii) 落盘 2026-05-26 |
+| [`v2/test-plan-v2g-evidence.md`](./v2/test-plan-v2g-evidence.md) | v2-G acceptance evidence ledger — 8/8 PASS,含 fix #1(bundle cap 64KiB→16MiB)+ fix #2(Block A "no fetch-all" 契约)实测物证 + 已知 v1 limitation 一条 | 2026-05-26 |
 | `architecture.md` | 系统架构图、session 生命周期、数据流 | v1.1(未建立) |
 | [`test-plan.md`](./test-plan.md) | 5 scenario 真机 manual checklist | Phase 11 落盘 |
 | [`audits/`](./audits/) | 各阶段 codex audit 报告原文(phase-1 … phase-N) | living |
