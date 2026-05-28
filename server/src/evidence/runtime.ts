@@ -58,6 +58,14 @@ export interface SearchEvidenceInput {
   readonly limit: number;
   readonly cursor: string | null;
   readonly mode?: EvidenceRuntimeMode;
+  /**
+   * v2-G.1 Block B (Phase 3 tool boundary adds this; Phase 1 lands the
+   * runtime plumbing). When `true`, the post-page transform skips the
+   * `previewForAgent` projection and returns raw records. The pre-projection
+   * `_meta` reservation invariant still fires regardless — `fullRecords:true`
+   * is not a bypass for that. Default `false`.
+   */
+  readonly fullRecords?: boolean;
 }
 
 export interface PullSummary {
@@ -154,8 +162,10 @@ async function runStreamPath(
           lineOffset: iter.next.lineOffset,
         });
 
+  const records = applyPostPageTransform(iter.records, input.source, input.fullRecords ?? false);
+
   return {
-    records: iter.records,
+    records,
     nextCursor,
     pulls,
     statsRun: {
@@ -250,8 +260,10 @@ async function runSortPath(
         })
       : null;
 
+  const records = applyPostPageTransform(pageRecords, input.source, input.fullRecords ?? false);
+
   return {
-    records: pageRecords,
+    records,
     nextCursor,
     pulls,
     statsRun: {
@@ -385,6 +397,80 @@ async function iterateLocal(input: IterateInput): Promise<IterateOutput> {
     }
   }
   return { records, filesScanned, recordsScanned, next: null };
+}
+
+/**
+ * v2-G.1 Phase 1 — post-page transform shared by `runStreamPath` and
+ * `runSortPath`.
+ *
+ * Two responsibilities, in order:
+ *
+ *   1. **Pre-projection invariant (Q5b invariant #6, Round 2 amendment).**
+ *      `_meta` is a globally reserved key on `ParsedRecord` — server-owned
+ *      metadata namespace. A source that produces records carrying `_meta`
+ *      via `parseLine` is a contract bug. The check runs for every page
+ *      record regardless of whether the source declared `previewForAgent`
+ *      and regardless of the caller's `fullRecords` opt-in; neither path
+ *      may bypass the reservation.
+ *
+ *   2. **Projection (Q5b post-page transform).** If the source declared
+ *      `previewForAgent?` AND the caller did NOT set `fullRecords:true`,
+ *      every page record is run through the hook and wrapped as
+ *      `{ ...result.record, _meta: { preview: {...} } }`. Otherwise the
+ *      raw records pass through unchanged (no `_meta` injection — agents
+ *      read absence as "this source does not support preview" or
+ *      "fullRecords was opted into").
+ *
+ * Pure: no I/O. The invariants in Q5b (#1-#5) guarantee this transform does
+ * not affect `matchQuery` / `sortKey` / cursor encoding / `recordsScanned` /
+ * `nextCursor` — those are all decided upstream by the caller.
+ *
+ * Phase 1 ships the wiring; no built-in source declares `previewForAgent`
+ * yet (`poppo_http` adds it in Phase 2). The `_meta` invariant is live
+ * from Phase 1 because it is a global contract on `ParsedRecord`, not a
+ * preview-only check.
+ */
+export function applyPostPageTransform(
+  pageRecords: readonly ParsedRecord[],
+  source: EvidenceSource,
+  fullRecords: boolean,
+): readonly ParsedRecord[] {
+  for (const r of pageRecords) {
+    assertNoReservedMeta(r, source.id);
+  }
+
+  if (source.previewForAgent === undefined || fullRecords) {
+    return pageRecords;
+  }
+
+  const previewHook = source.previewForAgent.bind(source);
+  return pageRecords.map((r) => {
+    const result = previewHook(r);
+    // `PreviewResult.record` is a `ParsedRecord`, so the global `_meta`
+    // reservation applies here too — a hook that returns `{...record,
+    // _meta:{...}}` would otherwise see its key silently overwritten by
+    // the wrapper below. Same error family / message as the raw-record
+    // guard above (codex Phase 1 audit Round 1 blocker).
+    assertNoReservedMeta(result.record, source.id);
+    return {
+      ...result.record,
+      _meta: {
+        preview: {
+          truncated: result.truncated,
+          fullSizeBytes: result.fullSizeBytes,
+          truncatedFields: result.truncatedFields,
+        },
+      },
+    } as ParsedRecord;
+  });
+}
+
+function assertNoReservedMeta(record: ParsedRecord, sourceId: string): void {
+  if ((record as { readonly _meta?: unknown })._meta !== undefined) {
+    throw new Error(
+      `source '${sourceId}' produced record with reserved key _meta; _meta is a server-owned metadata namespace`,
+    );
+  }
 }
 
 function sortedLocalFiles(cache: MtimeCache): readonly string[] {

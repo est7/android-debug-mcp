@@ -77,10 +77,47 @@ export interface DeviceFileEntry {
  * `search_evidence` discriminates on `query.source` (Q4) so the source impl
  * downcasts `record` to its internal type via `as` before reading domain
  * fields — typed at the impl boundary, opaque at the interface boundary.
+ *
+ * # Reserved key: `_meta`
+ *
+ * `_meta` is a globally reserved key on `ParsedRecord` — `source.parseLine`
+ * MUST NOT produce a record containing it. The runtime injects `_meta` as a
+ * server-owned namespace for read-time metadata (currently only
+ * `_meta.preview` from v2-G.1; future amendments may add `_meta.redaction`,
+ * `_meta.cached`, etc. under the same namespace). A pre-projection invariant
+ * in `evidence/runtime.ts` rejects any source-produced `_meta` regardless of
+ * preview opt-in / hook declaration — see `preview-for-agent.md` § Q3 / Q5b
+ * invariant #6.
  */
 export interface ParsedRecord {
   readonly source: string;
   readonly [key: string]: unknown;
+}
+
+/**
+ * Result returned by `EvidenceSource.previewForAgent?(record)` — the
+ * agent-facing read-time projection that shrinks oversize records before
+ * they go into the agent's context window (v2-G.1 Block B).
+ *
+ * Returned `record` is the source's preview-shaped record; the runtime
+ * wraps it as `{ ...record, _meta: { preview: { truncated, fullSizeBytes,
+ * truncatedFields } } }` before handing back to the caller. `fullSizeBytes`
+ * is the UTF-8 JSON byte length of the raw (pre-truncation) record — agents
+ * use this to decide whether to re-fetch with `fullRecords: true`.
+ * `truncatedFields` enumerates dotted field paths that were lossily
+ * mutated; empty array when `truncated:false`.
+ *
+ * Sources without `previewForAgent?` declared fall through to raw
+ * passthrough (no `_meta.preview` injected; see `preview-for-agent.md` § Q11
+ * three-row table). When declared, the hook fires for every record returned
+ * by either `runStreamPath` or `runSortPath`, page-slice-after, after the
+ * `_meta` reservation invariant has cleared.
+ */
+export interface PreviewResult {
+  readonly record: ParsedRecord;
+  readonly truncated: boolean;
+  readonly fullSizeBytes: number;
+  readonly truncatedFields: readonly string[];
 }
 
 /**
@@ -224,6 +261,29 @@ export interface EvidenceSource {
    * If unset, runtime uses the agent's query verbatim.
    */
   bindSession?(query: EvidenceQuery, ctx: EvidenceContext): EvidenceQuery;
+
+  /**
+   * OPTIONAL — v2-G.1 (codex 4-round plan review).
+   *
+   * Project `record` into an agent-facing preview shape — shrink oversize
+   * fields (`body.text`, `body.decoded`, etc. for `poppo_http`) so a single
+   * record cannot blow out the agent's context window. The hook fires at
+   * `searchEvidence` page-slice time, AFTER `matchQuery` / `sortKey` /
+   * cursor encoding / `recordsScanned` / `nextCursor` are decided (Q5b
+   * invariants #1-#5) and AFTER the global `_meta` reservation invariant
+   * has cleared (Q5b invariant #6). The runtime wraps the returned record
+   * as `{ ...result.record, _meta: { preview: {...} } }` before emit.
+   *
+   * Pure: no I/O, no closures over external state.
+   *
+   * Sources without this hook fall through to raw passthrough; agents read
+   * the absence of `_meta` on the response record as "this source does not
+   * support preview" (see `preview-for-agent.md` § Q11 three-row table).
+   * Agents may also opt out per-call via `fullRecords: true` on
+   * `search_evidence` / `extract_evidence_context` — that path SKIPS this
+   * hook entirely. Reserved-key invariant still fires either way.
+   */
+  previewForAgent?(record: ParsedRecord): PreviewResult;
 
   /**
    * OPTIONAL — Phase 4 amendment (codex audit R2).

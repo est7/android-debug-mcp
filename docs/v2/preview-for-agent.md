@@ -623,6 +623,41 @@ server/tests/
 
 ## Amendments(codex grill 与 audit 期间 fold-in)
 
+### Phase 1 audit — 2026-05-28 — codex STOP(`_meta` 反射也覆盖 hook output)
+
+Codex Phase 1 audit 抓到 1 条 blocking + 1 条 advisory。Blocking 是 contract
+refinement(language 收紧),不是 phase plan 变;advisory 是 test coverage 补强。
+全部 fold-in 进 Phase 1 同 commit。
+
+**Blocking issue(fold-in):**
+
+1. **`_meta` reservation 必须覆盖 `PreviewResult.record`,不仅 `parseLine` 输出** ——
+   `PreviewResult.record` 在 `types.ts` 同样 typed 为 `ParsedRecord`,所以 Q3 + Q5b
+   invariant #6 的"全局保留 key"语义对 hook 输出同样作数。原 Phase 1 `applyPostPageTransform`
+   只对 raw page records 跑 `_meta` 检测,hook 返回 `{...record, _meta:{...}}`
+   会被 runtime 静默 overwrite —— 等于又把 Q3 试图 define-out-of-existence 的
+   namespace collision 失败模式重新引入。Phase 2 即将接入第一个真 hook(`poppo_http`),
+   必须在 Phase 1 内 close。Fold-in:`applyPostPageTransform` 在 `previewHook(r)`
+   返回之后、wrap `_meta.preview` 之前再跑一次 `assertNoReservedMeta(result.record, source.id)`;
+   抽 helper `assertNoReservedMeta`,raw path 与 hook output path 共用同一 throw
+   form。新增 unit test 断言 hook-output collision 抛同 error message。
+
+**Advisory(fold-in):**
+
+- 原 6 个 unit test 全在 stream path(fake source 无 `sortKey`),sort path 的
+  helper 调用点(`runtime.ts:263`)只 visibly wired 没单测。Fold-in:fake source
+  扩 `sortable?: boolean` 选项,新增 2 个 sort-path unit —— (a) sort path preview
+  正常注入 `_meta.preview` + (b) sort path 上 hook output `_meta` collision 同样
+  抛错。stream/sort 对称性 contract 由此显式 cover。
+
+**Lock 语言收紧:** § Q3 / § Q5b invariant #6 的"`source.parseLine` 不允许产出 `_meta`"
+应读为"任何由 source 产出并喂给 runtime post-page transform 的 `ParsedRecord`
+不允许携 `_meta`",包括 `parseLine` 与 `previewForAgent` 两个出口。Lock 现状未改
+prose(Phase 1 audit 接受 contract 已经隐含此扩展;Q3 / Q5b 字面是
+`server-owned`/`globally reserved`,严格读已经覆盖 hook output),但 runtime impl
+与 unit test 明示此双出口防御。
+
+
 ### Round 1 — 2026-05-27 — codex pre-impl plan review STOP
 
 Codex 在 round 1 给 5 条 blocking + 3 条 advisory + 6 条 open-question 答案。下列
