@@ -714,8 +714,13 @@ handler post-parse 拿不到 "caller 有无 supply" 信号(default 把 undefined
   - **#1 capture tool description 没同步 v2-F.3**:Args / Returns / Errors 仍是
     v0.5.0 ship 文字,不提 `filter` / `limit` / `annotation.{unfilteredCount,
     filteredCount, truncated?, warnings?}` / `query_malformed when filter/limit
-    without annotateElements`。Description 是 agent-facing 契约面(inputSchema
-    `.passthrough()` 不暴露 source-specific shape 给 LLM),必须与 schema 同步。
+    without annotateElements`。Description 是 agent-facing 契约文本,与 strict
+    inputSchema 并列对 LLM 公开 —— 模型读 description 决定怎么 call,description
+    必须 mirror schema + handler reject 行为,否则 schema strict 拒绝时 agent
+    不知道为什么。(Round 2 verify amendment:原稿误写 "inputSchema `.passthrough()`",
+    实际 capture 用 `.strict()` 配 `ElementFilterSchema.strict()`,
+    `server/src/mcp/tools/capture.ts:24-42` + `server/src/ui/element_filter.ts:36-44`。
+    `.passthrough()` 是 `search_evidence` 的形态,与 capture 无关 —— 误植已 fix。)
     Fix:capture description 与 list_elements description 对齐,显式列五字段 filter
     + limit 边界 + annotation 块字段 + 所有 query_malformed 触发条件。
   - **#2 capture event/commands audit 字段没落 disk**:F3-Q8 lock 显式说
