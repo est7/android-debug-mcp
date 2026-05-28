@@ -11,6 +11,7 @@ import {
 } from "../../src/store/paths.ts";
 
 const savedEnv = process.env.ANDROID_DEBUG_MCP_RUN_ROOT;
+const savedLocksRoot = process.env.ANDROID_DEBUG_MCP_LOCKS_ROOT;
 let scratch = "";
 
 describe("resolveRunRoot — 4-source resolution (§ C-3)", () => {
@@ -25,6 +26,12 @@ describe("resolveRunRoot — 4-source resolution (§ C-3)", () => {
       delete process.env.ANDROID_DEBUG_MCP_RUN_ROOT;
     } else {
       process.env.ANDROID_DEBUG_MCP_RUN_ROOT = savedEnv;
+    }
+    if (savedLocksRoot === undefined) {
+      // biome-ignore lint/performance/noDelete: env unset, not the string "undefined".
+      delete process.env.ANDROID_DEBUG_MCP_LOCKS_ROOT;
+    } else {
+      process.env.ANDROID_DEBUG_MCP_LOCKS_ROOT = savedLocksRoot;
     }
     resetPathsCache();
     rmSync(scratch, { recursive: true, force: true });
@@ -114,7 +121,15 @@ describe("resolveProjectRoot — git-toplevel resolution (§ Q5, Phase 2.0)", ()
 
 describe("getLocksRoot", () => {
   it("returns ~/.android-debug-mcp/locks and ensures the directory exists", () => {
+    // biome-ignore lint/performance/noDelete: verify production fallback.
+    delete process.env.ANDROID_DEBUG_MCP_LOCKS_ROOT;
     const path = getLocksRoot();
     expect(path.endsWith(".android-debug-mcp/locks")).toBe(true);
+  });
+
+  it("uses ANDROID_DEBUG_MCP_LOCKS_ROOT when set", () => {
+    const locksRoot = join(scratch, "locks-env");
+    process.env.ANDROID_DEBUG_MCP_LOCKS_ROOT = locksRoot;
+    expect(getLocksRoot()).toBe(locksRoot);
   });
 });

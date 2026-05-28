@@ -13,3 +13,10 @@ import { join } from "node:path";
 if (!process.env.ANDROID_DEBUG_MCP_INDEX_ROOT) {
   process.env.ANDROID_DEBUG_MCP_INDEX_ROOT = mkdtempSync(join(tmpdir(), "adm-test-runidx-"));
 }
+
+// Lockfiles are host-global in production. In tests, redirect them to a
+// per-process tmp dir so lock tests do not write into the user's home or pick
+// up stale lock state from a previous run.
+if (!process.env.ANDROID_DEBUG_MCP_LOCKS_ROOT) {
+  process.env.ANDROID_DEBUG_MCP_LOCKS_ROOT = mkdtempSync(join(tmpdir(), "adm-test-locks-"));
+}

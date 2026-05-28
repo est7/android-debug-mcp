@@ -173,6 +173,62 @@ describe("search_logs tool", () => {
     expect(entries[0]?.tag).toBe("Net");
   });
 
+  it("aggregates a narrowed log search by tag", async () => {
+    const h = await harness();
+    const { runId, runDir } = await startRun(h);
+    writeFileSync(
+      join(runDir, "logcat.jsonl"),
+      `${[
+        JSON.stringify({ ...LOG_E, rawLineNo: 1, level: "E", tag: "App", pid: 100 }),
+        JSON.stringify({ ...LOG_E, rawLineNo: 2, level: "E", tag: "App", pid: 100 }),
+        JSON.stringify({ ...LOG_E, rawLineNo: 3, level: "E", tag: "Net", pid: 101 }),
+        JSON.stringify({ ...LOG_E, rawLineNo: 4, level: "I", tag: "App", pid: 100 }),
+      ].join("\n")}\n`,
+    );
+    const r = await h.client.callTool({
+      name: "android_debug_search_logs",
+      arguments: { runId, level: "E", count: true, groupBy: "tag", top: 1 },
+    });
+    expect(r.isError).toBeFalsy();
+    expect(structured(r)).toMatchObject({
+      entries: [],
+      matched: 3,
+      groupBy: "tag",
+      counts: [{ group: "App", count: 2 }],
+      groupsTotal: 2,
+      otherCount: 1,
+    });
+  });
+
+  it("keeps the narrowing gate in aggregation mode", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    const r = await h.client.callTool({
+      name: "android_debug_search_logs",
+      arguments: { runId, count: true, groupBy: "tag" },
+    });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(callText(r)).error).toBe("query_underspecified");
+  });
+
+  it("rejects inconsistent aggregation fields", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    const withoutCount = await h.client.callTool({
+      name: "android_debug_search_logs",
+      arguments: { runId, level: "E", groupBy: "tag" },
+    });
+    expect(withoutCount.isError).toBe(true);
+    expect(JSON.parse(callText(withoutCount)).error).toBe("query_malformed");
+
+    const withCursor = await h.client.callTool({
+      name: "android_debug_search_logs",
+      arguments: { runId, level: "E", count: true, groupBy: "tag", cursor: "x" },
+    });
+    expect(withCursor.isError).toBe(true);
+    expect(JSON.parse(callText(withCursor)).error).toBe("query_malformed");
+  });
+
   it("rejects an empty `tags` array at the schema boundary", async () => {
     const h = await harness();
     const { runId } = await startRun(h);

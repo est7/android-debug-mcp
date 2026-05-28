@@ -141,11 +141,15 @@ View-first 是把 testTag 规范这个**组织依赖**移出 milestone 关键路
 ### `android_debug_map_ui_node_to_source` I/O
 
 - **input**:`{ runId, anchorNode: Node|null, foregroundActivity: string|null,
-  ancestorChain: Node[] }`。`runId` 用于解析 `projectRoot`,并把本次调用记成一条
-  `source_mapping` 事件 + `commands.jsonl`。
+  ancestorChain: Node[], minConfidence?: "medium"|"high", top?: number }`。
+  `runId` 用于解析 `projectRoot`,并把本次调用记成一条 `source_mapping`
+  事件 + `commands.jsonl`。`minConfidence` 按整体 confidence verdict gate
+  candidate list;`top` 在 gate 通过后按确定性排序截前 N 个 candidate。
 - **output**(由 Q7 推导):`{ confidence, reason, signals[], candidates:
-  SourceCandidate[] }`。`confidence` / `reason` / `signals` 是对这次解析整体的
-  判定;`candidates` 是解析到的源码位置,确定性排序。
+  SourceCandidate[], warnings? }`。`confidence` / `reason` / `signals` 是对这次
+  解析整体的判定;`candidates` 是解析到的源码位置,确定性排序。若
+  `minConfidence` 未满足,返回原 verdict + `candidates: []` +
+  `warnings:["confidence_below_min"]`,不硬错、不退化返回 top-1。
 
 `signals[]` 取值(机读审计):`resource_id_present` / `resource_package_matches_session` /
 `layout_declares_id` / `layout_inflated_by_foreground_activity` / `code_refs_found` /

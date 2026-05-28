@@ -266,6 +266,57 @@ describe("searchLogs mark windows", () => {
   });
 });
 
+describe("searchLogs aggregation", () => {
+  it("counts matching entries by tag across the whole narrowed window", async () => {
+    writeLogcat(ENTRIES);
+    const r = await searchLogs(
+      runDir,
+      { limit: 2, level: "I", aggregate: { groupBy: "tag" } },
+      BUDGET,
+    );
+    expect(r.entries).toEqual([]);
+    expect(r.groupBy).toBe("tag");
+    expect(r.counts).toEqual([
+      { group: "App", count: 3 },
+      { group: "ActivityManager", count: 1 },
+      { group: "Cache", count: 1 },
+      { group: "libc", count: 1 },
+    ]);
+    expect(r.groupsTotal).toBe(4);
+    expect(r.otherCount).toBe(0);
+    expect(r.matched).toBe(6);
+    expect(r.nextCursor).toBeUndefined();
+  });
+
+  it("sorts equal-count groups deterministically and applies top", async () => {
+    writeLogcat(ENTRIES);
+    const r = await searchLogs(
+      runDir,
+      { limit: 100, sinceTs: "05-20 10:00:01.000", aggregate: { groupBy: "level", top: 2 } },
+      BUDGET,
+    );
+    expect(r.counts).toEqual([
+      { group: "E", count: 2 },
+      { group: "I", count: 2 },
+    ]);
+    expect(r.groupsTotal).toBe(6);
+    expect(r.otherCount).toBe(4);
+  });
+
+  it("groups by pid", async () => {
+    writeLogcat(ENTRIES);
+    const r = await searchLogs(
+      runDir,
+      { limit: 100, level: "E", aggregate: { groupBy: "pid" } },
+      BUDGET,
+    );
+    expect(r.counts).toEqual([
+      { group: "100", count: 2 },
+      { group: "9", count: 1 },
+    ]);
+  });
+});
+
 describe("searchLogs response budget (§ G-5)", () => {
   it("cuts the message of a single line that alone exceeds the budget", async () => {
     const huge: LogEntry = {

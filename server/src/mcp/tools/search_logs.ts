@@ -1,6 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { type SearchOptions, searchLogs } from "../../search/search_logs.ts";
+import {
+  LOG_AGGREGATE_GROUP_BYS,
+  type SearchOptions,
+  searchLogs,
+} from "../../search/search_logs.ts";
 import type { SessionManager } from "../../session/manager.ts";
 import { resolveRunDir } from "../../store/locate.ts";
 import { RESPONSE_CHAR_LIMIT } from "../constants.ts";
@@ -41,6 +45,9 @@ const inputSchema = z
       .max(500, "limit must be <= 500")
       .default(100),
     cursor: z.string().min(1, "cursor must be non-empty").optional(),
+    count: z.literal(true).optional(),
+    groupBy: z.enum(LOG_AGGREGATE_GROUP_BYS).optional(),
+    top: z.number().int().min(1, "top must be >= 1").max(100, "top must be <= 100").optional(),
   })
   .strict();
 
@@ -63,6 +70,10 @@ const outputSchema = z
     entries: z.array(logEntrySchema),
     scanned: z.number().int(),
     matched: z.number().int(),
+    groupBy: z.enum(LOG_AGGREGATE_GROUP_BYS).optional(),
+    counts: z.array(z.object({ group: z.string(), count: z.number().int() }).strict()).optional(),
+    groupsTotal: z.number().int().optional(),
+    otherCount: z.number().int().optional(),
     nextCursor: z.string().optional(),
     truncated: z.boolean().optional(),
     truncationMessage: z.string().optional(),
@@ -73,9 +84,9 @@ const description = [
   "Search a debug run's parsed logcat (`logcat.jsonl`), streaming and paginated.",
   "",
   "Use when: the agent needs log lines matching a pattern, a severity, or a window relative to a `mark_event` marker — for an active or a finalized run.",
-  "Args: `runId`; at least one of `query` / `level` / `sinceTs` / `beforeMark` / `afterMark` / `tags` (the call requires at least one narrowing filter on EVERY call — `buffer`, `excludeTags`, and `cursor` alone do NOT count). `query` is a case-insensitive substring of the message; `level` is a severity threshold — `W` returns W/E/F; `buffer` (`main`/`system`/`crash`) defaults to `main`; `sinceTs` is a device-clock `MM-DD HH:MM:SS.mmm` prefix, kept lines `>=` it; `beforeMark` / `afterMark` name a `mark_event` mark — the logcat window before/after where that mark was placed; `tags` keeps only entries whose `tag` exactly matches one of these (case-sensitive); `excludeTags` drops entries whose `tag` matches (applied after `tags`); `limit` (1-500, default 100); `cursor` resumes pagination — pass the SAME positive filter from the first page on every subsequent page.",
-  "Returns: `{entries[], scanned, matched, nextCursor?, truncated?, truncationMessage?}`. `nextCursor` present means more lines remain. `truncated` means one oversized log line had its message cut.",
-  "Errors: `run_missing` for an unknown runId; `query_underspecified` when the call carries no positive narrowing filter (cursor / buffer / excludeTags alone do not count); `invalid_cursor` for a malformed cursor; `mark_not_found` when `beforeMark` / `afterMark` names a mark not in the run.",
+  'Args: `runId`; at least one of `query` / `level` / `sinceTs` / `beforeMark` / `afterMark` / `tags` (the call requires at least one narrowing filter on EVERY call — `buffer`, `excludeTags`, and `cursor` alone do NOT count). `query` is a case-insensitive substring of the message; `level` is a severity threshold — `W` returns W/E/F; `buffer` (`main`/`system`/`crash`) defaults to `main`; `sinceTs` is a device-clock `MM-DD HH:MM:SS.mmm` prefix, kept lines `>=` it; `beforeMark` / `afterMark` name a `mark_event` mark — the logcat window before/after where that mark was placed; `tags` keeps only entries whose `tag` exactly matches one of these (case-sensitive); `excludeTags` drops entries whose `tag` matches (applied after `tags`); `limit` (1-500, default 100); `cursor` resumes pagination — pass the SAME positive filter from the first page on every subsequent page. Aggregation mode: `count:true` with `groupBy:"level"|"tag"|"pid"` scans the narrowed set and returns counts instead of log entries; optional `top` (1-100) keeps the largest groups. Aggregation does not accept `cursor`.',
+  "Returns: normal mode `{entries[], scanned, matched, nextCursor?, truncated?, truncationMessage?}`. `nextCursor` present means more lines remain. `truncated` means one oversized log line had its message cut. Aggregation mode returns `{entries:[], scanned, matched, groupBy, counts:[{group,count}], groupsTotal, otherCount}` where `matched` is the total narrowed log-line count before grouping and `otherCount` is the count outside the returned top groups.",
+  "Errors: `run_missing` for an unknown runId; `query_underspecified` when the call carries no positive narrowing filter (cursor / buffer / excludeTags alone do not count); `query_malformed` when aggregation fields are inconsistent; `invalid_cursor` for a malformed cursor; `mark_not_found` when `beforeMark` / `afterMark` names a mark not in the run.",
 ].join("\n");
 
 export function registerSearchLogs(server: McpServer, manager: SessionManager): void {
@@ -120,6 +131,27 @@ export function registerSearchLogs(server: McpServer, manager: SessionManager): 
           { tool: "search_logs" },
         );
       }
+      if ((input.count === true) !== (input.groupBy !== undefined)) {
+        throw new ToolDomainError(
+          "query_malformed",
+          "search_logs aggregation requires count:true and groupBy together.",
+          { tool: "search_logs" },
+        );
+      }
+      if (input.top !== undefined && input.count !== true) {
+        throw new ToolDomainError(
+          "query_malformed",
+          "search_logs top is only valid with count:true aggregation.",
+          { tool: "search_logs" },
+        );
+      }
+      if (input.count === true && input.cursor !== undefined) {
+        throw new ToolDomainError(
+          "query_malformed",
+          "search_logs aggregation scans the narrowed set and does not accept cursor pagination.",
+          { tool: "search_logs" },
+        );
+      }
       const runDir = await resolveRunDir(manager, input.runId);
       const opts: SearchOptions = {
         limit: input.limit,
@@ -132,12 +164,24 @@ export function registerSearchLogs(server: McpServer, manager: SessionManager): 
         ...(input.tags !== undefined ? { tags: input.tags } : {}),
         ...(input.excludeTags !== undefined ? { excludeTags: input.excludeTags } : {}),
         ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+        ...(input.count === true && input.groupBy !== undefined
+          ? {
+              aggregate: {
+                groupBy: input.groupBy,
+                ...(input.top !== undefined ? { top: input.top } : {}),
+              },
+            }
+          : {}),
       };
       const result = await searchLogs(runDir, opts, RESPONSE_CHAR_LIMIT - ENVELOPE_RESERVE);
       return ok({
         entries: result.entries,
         scanned: result.scanned,
         matched: result.matched,
+        ...(result.groupBy !== undefined ? { groupBy: result.groupBy } : {}),
+        ...(result.counts !== undefined ? { counts: result.counts } : {}),
+        ...(result.groupsTotal !== undefined ? { groupsTotal: result.groupsTotal } : {}),
+        ...(result.otherCount !== undefined ? { otherCount: result.otherCount } : {}),
         ...(result.nextCursor !== undefined ? { nextCursor: result.nextCursor } : {}),
         ...(result.truncated ? { truncated: true } : {}),
         ...(result.truncationMessage !== undefined

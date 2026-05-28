@@ -7,6 +7,8 @@ import { readLinesFrom } from "./line_reader.ts";
 /** logcat levels, ascending severity. `S` (silent) is not a filterable input. */
 export const LOG_LEVELS = ["V", "D", "I", "W", "E", "F"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
+export const LOG_AGGREGATE_GROUP_BYS = ["level", "tag", "pid"] as const;
+export type LogAggregateGroupBy = (typeof LOG_AGGREGATE_GROUP_BYS)[number];
 
 const LEVEL_RANK: Record<string, number> = { V: 0, D: 1, I: 2, W: 3, E: 4, F: 5, S: 6 };
 
@@ -37,6 +39,15 @@ export interface SearchOptions {
   readonly excludeTags?: readonly string[];
   readonly limit: number;
   readonly cursor?: string;
+  readonly aggregate?: {
+    readonly groupBy: LogAggregateGroupBy;
+    readonly top?: number;
+  };
+}
+
+export interface LogAggregate {
+  readonly group: string;
+  readonly count: number;
 }
 
 export interface SearchResult {
@@ -46,6 +57,10 @@ export interface SearchResult {
   /** Matching entries returned in THIS page. */
   readonly matched: number;
   readonly nextCursor?: string;
+  readonly groupBy?: LogAggregateGroupBy;
+  readonly counts?: LogAggregate[];
+  readonly groupsTotal?: number;
+  readonly otherCount?: number;
   /** True only when a single entry overflowed the budget and its message was cut. */
   readonly truncated?: boolean;
   readonly truncationMessage?: string;
@@ -75,6 +90,19 @@ export async function searchLogs(
   const minRank = opts.level ? (LEVEL_RANK[opts.level] ?? 0) : 0;
   const tagSet = opts.tags ? new Set(opts.tags) : undefined;
   const excludeTagSet = opts.excludeTags ? new Set(opts.excludeTags) : undefined;
+
+  const aggregate = opts.aggregate;
+  if (aggregate !== undefined) {
+    return aggregateLogs(runDir, opts, aggregate, {
+      afterOffset,
+      beforeOffset,
+      minRank,
+      queryLc,
+      tagSet,
+      excludeTagSet,
+      start,
+    });
+  }
 
   const entries: LogEntry[] = [];
   let scanned = start.scanned;
@@ -140,6 +168,78 @@ export async function searchLogs(
         }
       : {}),
   };
+}
+
+interface AggregateContext {
+  readonly afterOffset: number | null;
+  readonly beforeOffset: number | null;
+  readonly minRank: number;
+  readonly queryLc: string | undefined;
+  readonly tagSet: ReadonlySet<string> | undefined;
+  readonly excludeTagSet: ReadonlySet<string> | undefined;
+  readonly start: SearchCursor;
+}
+
+async function aggregateLogs(
+  runDir: string,
+  opts: SearchOptions,
+  aggregate: NonNullable<SearchOptions["aggregate"]>,
+  ctx: AggregateContext,
+): Promise<SearchResult> {
+  const counts = new Map<string, number>();
+  let scanned = ctx.start.scanned;
+  let matched = 0;
+
+  for await (const { offset, text } of readLinesFrom(
+    join(runDir, "logcat.jsonl"),
+    ctx.start.offset,
+  )) {
+    scanned++;
+    const entry = parseLine(text);
+    if (
+      entry === null ||
+      !matches(entry, offset, {
+        afterOffset: ctx.afterOffset,
+        beforeOffset: ctx.beforeOffset,
+        minRank: ctx.minRank,
+        opts,
+        queryLc: ctx.queryLc,
+        tagSet: ctx.tagSet,
+        excludeTagSet: ctx.excludeTagSet,
+      })
+    ) {
+      continue;
+    }
+    matched++;
+    const key = aggregateKey(entry, aggregate.groupBy);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  const sorted = [...counts.entries()]
+    .map(([group, count]) => ({ group, count }))
+    .sort((a, b) => b.count - a.count || a.group.localeCompare(b.group));
+  const visibleCounts = aggregate.top !== undefined ? sorted.slice(0, aggregate.top) : sorted;
+  const visibleTotal = visibleCounts.reduce((sum, item) => sum + item.count, 0);
+  return {
+    entries: [],
+    scanned,
+    matched,
+    groupBy: aggregate.groupBy,
+    counts: visibleCounts,
+    groupsTotal: sorted.length,
+    otherCount: matched - visibleTotal,
+  };
+}
+
+function aggregateKey(entry: LogEntry, groupBy: LogAggregateGroupBy): string {
+  switch (groupBy) {
+    case "level":
+      return entry.level;
+    case "tag":
+      return entry.tag;
+    case "pid":
+      return String(entry.pid);
+  }
 }
 
 interface MatchContext {

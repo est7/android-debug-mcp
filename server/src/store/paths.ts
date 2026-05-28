@@ -24,6 +24,7 @@ export interface ResolvedRunRoot {
 }
 
 const ENV_VAR = "ANDROID_DEBUG_MCP_RUN_ROOT";
+const LOCKS_ENV_VAR = "ANDROID_DEBUG_MCP_LOCKS_ROOT";
 const REPO_LOCAL_DIRNAME = ".android-debug-runs";
 const HOME_FALLBACK_REL = ".android-debug-mcp/runs";
 
@@ -123,7 +124,11 @@ export function resolveProjectRoot(input: ResolveProjectRootInput = {}): string 
  * serialize across all repositories and runRoot choices on this host.
  */
 export function getLocksRoot(): string {
-  const path = join(homedir(), ".android-debug-mcp", "locks");
+  const envValue = process.env[LOCKS_ENV_VAR];
+  const path =
+    envValue && envValue.trim() !== ""
+      ? ensureAbsolute(envValue)
+      : join(homedir(), ".android-debug-mcp", "locks");
   mkdirSync(path, { recursive: true });
   return path;
 }

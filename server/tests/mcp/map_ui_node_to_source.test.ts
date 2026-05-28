@@ -140,6 +140,71 @@ describe("map_ui_node_to_source — happy path", () => {
     expect(commands).toContain("map_ui_node_to_source");
   });
 
+  it("keeps candidates when minConfidence is satisfied", async () => {
+    const { runId } = await makeRun(fixtureRoot);
+    const client = await harness();
+    const result = await callMap(client, {
+      runId,
+      anchorNode: node(`${PKG}:id/login_button`),
+      foregroundActivity: `${PKG}/.LoginActivity`,
+      ancestorChain: [],
+      minConfidence: "high",
+    });
+    const sc = structured(result);
+    expect(sc.confidence).toBe("high");
+    expect(Array.isArray(sc.candidates) && sc.candidates.length).toBeGreaterThan(0);
+    expect(sc.warnings).toBeUndefined();
+  });
+
+  it("filters candidates with a warning when minConfidence is not satisfied", async () => {
+    const { runId, runDir } = await makeRun(fixtureRoot);
+    const client = await harness();
+    const result = await callMap(client, {
+      runId,
+      anchorNode: node(`${PKG}:id/login_button`),
+      foregroundActivity: `${PKG}/.LoginActivity`,
+      ancestorChain: [
+        {
+          ...node(`${PKG}:id/recycler_parent`),
+          class: "androidx.recyclerview.widget.RecyclerView",
+        },
+      ],
+      minConfidence: "medium",
+    });
+    const sc = structured(result);
+    expect(sc.confidence).toBe("low");
+    expect(sc.candidates).toEqual([]);
+    expect(sc.warnings).toEqual(["confidence_below_min"]);
+
+    const events = readFileSync(join(runDir, "events.jsonl"), "utf8");
+    expect(events).toContain('"warnings":["confidence_below_min"]');
+    expect(events).toContain('"minConfidence":"medium"');
+  });
+
+  it("caps candidates with top after the confidence gate passes", async () => {
+    const { runId } = await makeRun(fixtureRoot);
+    const client = await harness();
+    const result = await callMap(client, {
+      runId,
+      anchorNode: node(`${PKG}:id/login_button`),
+      foregroundActivity: `${PKG}/.LoginActivity`,
+      ancestorChain: [],
+      minConfidence: "medium",
+      top: 1,
+    });
+    const sc = structured(result);
+    expect(sc.confidence).toBe("high");
+    expect(sc.candidates).toEqual([
+      {
+        file: "app/src/main/res/layout/activity_login.xml",
+        line: 6,
+        kind: "id_declaration",
+        text: 'android:id="@+id/login_button"',
+      },
+    ]);
+    expect(sc.warnings).toBeUndefined();
+  });
+
   it("returns a soft none result with no search when anchorNode is null", async () => {
     const { runId } = await makeRun(fixtureRoot);
     const client = await harness();
