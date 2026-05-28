@@ -518,3 +518,329 @@ Q12 / § 失败语义 写的 `{isError:true}` 形态实际上是 *InMemoryTransp
 - 未来若 v2-F 接入非 code-driven-i18n 的 app(如 popposhell Compose flavor 或
   外部 partner app),hint 真机 surface 会自然命中,不需要修订本 amendment 或本
   lock —— 本 amendment 只声明 Poppo / Vone *目前* 不可达。
+
+### 2026-05-28 · v2-F.3 list_elements / capture.annotateElements filter(翻案 + 设计 lock)
+
+**翻案说明:**
+
+- 原决策(§ Open implementation decisions #4):"`list_elements` 是否接受
+  `clickableOnly?: boolean` 入参?**倾向**:不加;agent client-side filter 已足够,
+  加这个 param 容易诱导 agent 漏掉 scrim"。
+- 新决策(本 amendment):**加** `filter?: ElementFilter` 入参,涵盖
+  `clickableOnly` / `classContains` / `textContains` / `contentDescContains` /
+  `inViewport` 五个字段(Round 1 fold-in 把原稿 4 字段补齐 `contentDescContains`,
+  icon-only Search 类节点 server-side 可达);同样形状的 filter 同步加到
+  `android_debug_capture` 的 `annotateElements:true` 路径(两 tool 引用同一 zod
+  对象,避免 schema drift)。**不加** pagination `cursor`;`limit` 在 filter
+  后切尾。
+- 触发原因:
+  - v0.5.0 ship `capture.annotateElements:true` 之后,annotate 把 `Element[]`
+    完整 spread 到 `annotation.elements`,**同一份 60-80 元素数组现在出现在
+    capture 响应中**(v2-F.0 lock 时这只在 list_elements 出现)。Element 数组
+    实测 15-40 KB(60-80 elements × 文本字段),capture 加 annotate 后单次响应
+    token 翻倍。
+  - 原决策的 "client-side filter 已足够" 在 v0.5.0 ship 前是成立的(token 成本
+    一次性),但 annotate 之后变成"每次 capture 都吃这个成本";server-side
+    filter 是把 wire 上的 byte 真正减下来,**不是** "agent 自己挑哪些用"。
+    这跟 v2-G.1 Block B 的 `previewForAgent` 同根:agent 不该有"我自己挑"的
+    选择 — 应该 server 端就把 wire 形态收紧,agent 显式付代价才拿全。
+  - "诱导 agent 漏掉 scrim" 这条原顾虑 scope 重审:`clickableOnly:true` 实际
+    **保留** scrim(scrim 通常 `clickable:true`);真正会丢 scrim 的是
+    `textContains` / `classContains`(scrim 无 text、class 不常见词),那是
+    agent 主动决定的 narrow,与 v2-G.1 narrowingFilter 同体例。Description
+    显式提醒 agent "filter 是付费 narrowing,过窄会漏 scrim/intercept 层"。
+
+**影响范围:**
+
+- `server/src/mcp/tools/list_elements.ts` — inputSchema 加 `filter?: ElementFilter`,
+  handler 调 `collectCurrentElements()` 之后切;输出 schema 加 `truncated?: true`
+  warning when filter+limit cut elements off。
+- `server/src/mcp/tools/capture.ts` — inputSchema 加 `filter?: ElementFilter`
+  (与 list_elements 同 zod object,共享 import);仅在 `annotateElements:true`
+  时生效(`annotateElements:false` + filter 同传 → `query_malformed`);filter 后
+  的 element 集既用来 annotate 也作 `annotation.elements` 输出。
+- `server/src/ui/list_elements.ts`(或新 `server/src/ui/element_filter.ts`)—
+  共享 `applyElementFilter(elements, filter, viewport)` 纯函数 + `ElementFilterSchema`
+  zod 导出。两 tool import 同一处。
+- viewport 来源:`adb shell wm size` per call(~50ms,可接受;不缓存,避免
+  fold-screen / rotation 失效)。仅当 `filter.inViewport === true` 时探。
+- 不动 `Element` schema(`list_elements` 返回字段不变,filter 仅截短数组)。
+- 不动 `list_elements` event(`elementCount` 报的是 **filter 之后** 的数,
+  附加 `unfilteredCount: number` 字段反映原始数 — agent / 事后审计需要)。
+
+**Q-decisions(本 sprint 内 lock):**
+
+#### F3-Q1:filter 字段集
+
+**Decision(Round 1 修订):五字段 `{clickableOnly, classContains, textContains,
+contentDescContains, inViewport}`,全 optional;无 filter 字段时退化为 v2-F.0
+行为(全集返回)。**
+
+```ts
+// 共享 zod object,list_elements + capture 都引用
+const ElementFilterSchema = z
+  .object({
+    clickableOnly: z.boolean().optional(),
+    classContains: z.string().min(1).max(255).optional(),       // 大小写不敏感 substring on Element.class
+    textContains: z.string().min(1).max(255).optional(),        // 大小写不敏感 substring on Element.text
+    contentDescContains: z.string().min(1).max(255).optional(), // 大小写不敏感 substring on Element.contentDesc
+    inViewport: z.boolean().optional(),                         // 与设备 viewport 相交(intersect,非 fully-inside)
+  })
+  .strict();
+```
+
+不加 `focusableOnly` / `checkableOnly`(YAGNI;agent 几乎不按这两字段筛)。
+不加 `hintContains`(Poppo/Vone hint 结构性为 null,见上一 amendment;非 Poppo app
+未来真有需要再补)。
+
+**Round 1 amendment(codex STOP 2026-05-28 #1):** 原 F3-Q1 漏了
+`contentDescContains`,理由写"可由 textContains 覆盖大部分" —— 错。`Element.text`
+与 `Element.contentDesc` 是 schema 上两个独立 nullable 字段(`server/src/ui/list_elements.ts:27-30`
+与 `:88-91`),text 为空、仅 content-desc 标识的 icon-only button(如 Material
+"Search" magnifier)在 textContains 上无法命中。证据:现有测试 fixture
+`server/tests/mcp/capture_annotate.test.ts:18-23` 就有 `text:"", content-desc:"Search"`
+的 element,本 amendment 加入 contentDescContains 后这类节点能 server-side narrow。
+`contentDesc` 与 v2-F.0 § 文档定位 第 14 行 / Q5 / Element schema / acceptance 都
+锁过是 first-class 信号,缺它是 contract 漏洞,不是 YAGNI。
+
+#### F3-Q2:filter 是 AND 还是 OR 组合?
+
+**Decision:AND(全部 satisfied 才入 page)。**
+
+与 v2-G poppo_http.matchQuery 同体例。OR 形态在 list_elements 场景没有清晰
+agent use case(agent 通常想"既 clickable 又含 Login 字样")。AND 之 narrow
+正是 sprint 的 token 节省目的。
+
+#### F3-Q3:textContains / classContains 是否大小写敏感?
+
+**Decision:全部大小写不敏感(case-insensitive)。**
+
+- `class` 字段是 Java FQCN(`android.widget.Button` 等),大小写虽通常稳定,
+  但 agent 写 `"button"` 应该匹配。
+- `text` 字段是用户可见字符串,case-insensitive 更友好。
+- 实现:`element.text.toLowerCase().includes(query.toLowerCase())`,impl 简单。
+
+#### F3-Q4:`inViewport` 是 intersect 还是 fully-inside?
+
+**Decision:intersect(任何像素在 viewport 内即留),半开矩形 boundary。**
+
+- Fully-inside 会丢 scrolled-list 边缘元素(bounds 部分超出屏幕但仍可 tap 中心)。
+- Intersect 与 agent 实际意图(找"可见可达"元素)一致。
+- 实现(Round 1 修订,half-open `[left, right) × [top, bottom)`,与
+  `server/src/ui/hit_test.ts:133-135` 现有 hit-test convention 对齐):
+  ```ts
+  !(bounds.right <= 0 || bounds.left >= viewport.w
+    || bounds.bottom <= 0 || bounds.top >= viewport.h)
+  ```
+  原稿写 `<0` / `>w` / `<0` / `>h`,会让 bounds 刚好贴在右/下边界(零重叠)
+  也算 intersect — 与 hit-test 半开矩形不一致。
+
+Viewport 由 `adb shell wm size` 探(stdout 形如 `Physical size: 1080x2400` /
+`Override size: 1440x3120`)。Override 优先,fall back to Physical。探失败 →
+`filter.inViewport` no-op + 返 `warnings: ["viewport_unknown"]`,**不**报错
+(uiautomator dump 仍正常返,agent 自己决定要不要按 bounds 筛)。
+
+**Round 1 amendment(codex advisory 2026-05-28 #1):** 视口算法改为半开矩形,
+与 hit-test 同 convention。单元测试覆盖 edge case:bounds 触右/下边但零重叠(reject)、
+触左/上边但零重叠(reject)、部分重叠(keep)、完全在外(reject)、完全在内(keep)。
+
+#### F3-Q5:pagination 是否引入 `cursor`?+ `limit` 公契约
+
+**Decision:不引入 cursor。`limit` 切尾 + `truncated:true` warning 即可。**
+
+- list_elements 每次都跑 fresh dump(§ "Do not cache" 显式),cursor 跨调用
+  没有 stable identity 可锚 — 下次调用 captureId 必然不同,cursor 失效。
+- 引入 cursor 会强制 server 缓存 element 数组(违反 § "Do not cache" 与
+  open decision #2 "不加 id 避免诱导 replay"),设计成本远大于收益。
+- 替代方案:agent 拿到 `truncated:true` → 加紧 filter narrow → 重 call。这正是
+  v2-G.1 narrowingFilter 已经验过的 agent loop 形态。
+
+**`limit` 公契约(Round 1 amendment,locked in this sprint;Round 2 修订
+zod 链顺序):**
+
+```ts
+// 共享 zod fragment,list_elements 与 capture(annotateElements:true)同 import
+const elementLimitSchema = z.number().int().min(1).max(500).default(100);
+```
+
+`.default(100)` **不**追加 `.optional()` —— zod 行为:`.default(100).optional()` 解析
+`undefined` 仍返 `undefined`(`.optional()` 包在外层覆盖 default);单 `.default(100)`
+解析 `undefined` 返 `100`,且 TS-level input 视为可选(caller 仍可省略)。与
+`server/src/mcp/tools/search_evidence.ts:39-44` 和 `extract_evidence_context.ts:65-70`
+现有 v2-G evidence `limit` 形态完全一致。
+
+**Round 2 amendment(codex STOP 2026-05-28 blocking #1):** 原 Round 1 写
+`.default(100).optional()`,链顺序错 — `parse(undefined)` 返 undefined 不是 100,
+agent 省略 `limit` 时 handler 拿到的是 undefined 而非默认值,违反 "默认 100" 公契约。
+Codex 现场 `bun -e` 验过,本地复现一致(`default(100).optional()` → undefined,
+`default(100)` → 100,`optional().default(100)` → 100)。最终落点:删 `.optional()`,
+与 v2-G 现行 evidence limit 同体例;Phase 1 test 显式 assert 两 tool 上 omitted
+`limit` 都解析为 100(不是仅断言 "limit is optional")。
+
+- 类型:`number`,integer,1–500 inclusive,default 100。
+- 0 是 invalid input(min 1)— 与 v2-G evidence search `limit` 同体例;`limit:0`
+  / `limit:-1` 在 zod parse 阶段被打回。
+- 默认 100 略大于 v2-F.0 实测最大 80 元素,正常一屏 dump 不会触发 truncate;
+  agent 主动收紧 filter 时仍可显式传更小值。
+- **两 tool 同共享 schema**:`list_elements` 与 `capture({annotateElements:true})`
+  都接受 `limit`,**绝不 drift**(共用 zod import,Phase 1 实施时如发现 drift =
+  bug)。
+- `capture` 上的 `limit` 仅在 `annotateElements:true` 时有意义:同 filter,
+  `limit` 配 `annotateElements:false`/缺 → `query_malformed`(handler-side guard,
+  与 F3-Q7 同体例)。
+
+**Round 1 amendment(codex STOP 2026-05-28 #2):** 原 F3-Q5 只说 "limit 默认 100",
+未具化 zod fragment、min/max、`0` 边界、是否两 tool 共享。codex 抓为 public
+contract 漏洞:Phase 1 实施可能 drift(`list_elements` 与 capture 走不同 schema /
+不同 default / 不同 error message)。最终落点:本段加 `elementLimitSchema` zod
+fragment + 显式两 tool 同共享 + `0` 由 zod 强制 ≥1 + 两 tool 边界一致;
+F3-Q7 capture 的 `query_malformed` 形态扩到也包含 `limit without annotateElements:true`。
+
+#### F3-Q6:filter 与 v2-F.2 (c) `annotateElementIds?` 的关系?
+
+**Decision:不同轴,可共存,本 sprint 只做 filter(server-side 截短),
+`annotateElementIds` 推 v2-F.2 sprint。**
+
+- filter:server 端"产 list 时直接少返";byte 真减。
+- `annotateElementIds`:server 已产 list 后,annotate 时"只画指定 N 个 badge"
+  + (可选)只返这 N 个的 mapping;byte 减第二刀。
+- 两者正交且都有意义。本 sprint 先做 filter,annotate iteration 留 v2-F.2。
+
+#### F3-Q7:capture.annotateElements + filter / limit 组合的边界
+
+**Decision:`filter` 和 `limit` 字段在 capture 上**仅当** `annotateElements:true`
+才有意义;`filter` 或 `limit` 同传但 `annotateElements:false` / 缺 →
+`query_malformed`。**
+
+- 同 v0.5.0 已建立的 "annotateElements 需要 screenshot kind" 形态;handler-side
+  guard(`.refine()` 进不去 inputSchema § G-4)。
+- 拒绝形态:三种合一条 handler check —
+  `wantsAnnotate === false && (filter !== undefined || limit !== undefined) → throw`。
+- filter 后的 element 集既参与 annotate badge(每条 → 一个数字编号),
+  也作 `annotation.elements` 输出 mapping — 两者必须基于同一 filtered+truncated 集合,
+  byte-equiv 不动 v0.5.0 已 lock 的 invariants。
+- annotation badge 数字编号 = 同次响应内 filtered+truncated 集合的 1-based index
+  (v2-F.1 § Q5 体例不变;filter 只是改变进入这个集合的元素子集)。
+
+#### F3-Q8:输出 schema 增量(Round 1 修订:`truncated` 改用 postFilter)
+
+**Decision:**
+
+```ts
+// list_elements outputSchema 增量:
+{
+  ...existing fields,
+  unfilteredCount: number,        // pre-filter element count(= dump 原始数量)
+  filteredCount: number,          // post-filter, pre-truncate count
+  truncated?: true,               // 当 filteredCount > elements.length(即 limit 真正切掉了 ≥1 条)
+  warnings?: string[],            // 当前仅 "viewport_unknown" 一种
+}
+
+// list_elements event 增量(events.jsonl):
+{
+  ...existing fields (captureId, elementCount, windowCount, label?),
+  unfilteredCount: number,        // pre-filter
+  filteredCount: number,          // post-filter, pre-truncate
+  filter?: ElementFilter,         // echo 原 input filter(便于 audit)
+  limit?: number,                 // echo 原 input limit
+  truncated?: true,
+}
+
+// capture annotateElements 路径上:
+{
+  ...,
+  annotation: {
+    ...existing fields (screenshotPath, elementCount, error, elements),
+    unfilteredCount: number,      // pre-filter
+    filteredCount: number,        // post-filter
+    truncated?: true,
+    warnings?: string[],          // viewport_unknown 等;capture 上独立 channel(不破顶层 outputSchema)
+  }
+}
+// capture event(events.jsonl)+ commands.jsonl row 同样加 unfilteredElementCount /
+// filteredElementCount / filter? / limit? / truncated? 字段。
+```
+
+`elementCount` 字段语义不变(等于 returned `elements.length`);
+**`unfilteredCount`** = 扫出但未过 filter 的原始数;
+**`filteredCount`** = 过 filter 但未 truncate 的中间数;
+**`truncated`** 仅在 `filteredCount > elements.length` 时存在(i.e. limit 真的
+切掉了 ≥1 条 post-filter 命中)。
+Agent 可以算 narrowness = `filteredCount / unfilteredCount`;agent 看 `truncated:true`
+知道"应收紧 filter 再 call"。
+
+**Round 1 amendment(codex STOP 2026-05-28 #3):** 原 F3-Q8 把 `truncated` 定义
+为 "elements.length === filter limit < unfilteredCount" —— 假阳性。反例:raw 80
+elements,filter 命中 1 条,limit=1 → returned.length===1, limit===1, 1<80,
+formula 说 truncated:true,但实际什么都没被切。Agent 看到误 signal 会无谓收紧
+filter / 误判没拿全。最终落点:**改用 `filteredCount`(post-filter pre-truncate
+中间量)和 `elements.length`(post-truncate)做差值**,`truncated:true` 仅 iff
+`filteredCount > elements.length`(对应"limit 实际切掉了 ≥1 条 filter 命中")。
+schema / event / commands.jsonl 同步加 `filteredCount` 字段 expose audit consumer。
+
+**Round 1 amendment(codex advisory 2026-05-28 #2):** 原 F3-Q8 只在
+`list_elements.outputSchema.warnings?` 给了 `viewport_unknown` channel,capture
+路径无 channel,导致 `capture({annotateElements:true, filter:{inViewport:true}})`
+在探测失败时无处 surface warning。最终落点:capture 的 `annotation` 嵌套块加
+`warnings?: string[]`,与 list_elements 的 top-level `warnings?` 同形;capture
+上的 viewport_unknown 走 `annotation.warnings`,不破 capture 顶层 outputSchema(顶层
+保留 v0.5.0 ship 的 strict shape)。
+
+**Tool description 增量:**
+
+- list_elements:加 "Use `filter` (clickableOnly / classContains / textContains /
+  contentDescContains / inViewport) to narrow at server-side — agents that read
+  truncated:true should apply a tighter filter and re-call. Filters compose as AND."
+- capture(annotateElements path):同样描述 + "filter on capture only takes
+  effect when annotateElements:true; otherwise → query_malformed."
+
+**Test coverage 计划(grill GO 后):**
+
+- `server/src/ui/element_filter.ts` 新模块 + `server/tests/ui/element_filter.test.ts`
+  - 5 字段独立(`clickableOnly` / `classContains` / `textContains` /
+    `contentDescContains` / `inViewport`)+ AND 组合
+  - case-insensitivity 三处验证(`classContains`、`textContains`、`contentDescContains`)
+  - **icon-only content-desc 命中**:fixture `text:"", contentDesc:"Search"` 用
+    `contentDescContains:"search"` 应命中(对齐 codex Round 1 #1 引用的现有
+    `server/tests/mcp/capture_annotate.test.ts:18-23` fixture pattern)
+  - viewport intersect 半开矩形边界:bounds 触右/下边零重叠(reject)/ 触左/上边
+    零重叠(reject)/ 部分重叠(keep)/ 完全在外(reject)/ 完全在内(keep)
+- `server/tests/mcp/list_elements.test.ts` 或同 file 加 filter 端到端
+  - 无 filter 退化(行为不变)/ 各 filter 字段端到端
+  - `limit` 边界:default 100、传 0 → zod reject (query_malformed)、传 501 → zod reject
+  - **truncated 正确性**(对齐 codex Round 1 #3):
+    - raw=80, filter 命中 80, limit=10 → `truncated:true`,
+      `filteredCount:80, elements.length:10`
+    - raw=80, filter 命中 1, limit=1 → `truncated` 缺(假阳性回归),
+      `filteredCount:1, elements.length:1`
+  - viewport_unknown warning(注入 mock 让 `wm size` 探测失败)
+- `server/tests/mcp/capture_annotate.test.ts` 加 filter + annotateElements
+  对称行为:
+  - filter + `annotateElements:true` → filtered annotation.elements + 一致的 badge id 编号
+  - `filter without annotateElements:true → query_malformed`
+  - `limit without annotateElements:true → query_malformed`(同 reject 路径)
+  - `annotation.warnings` 包含 `viewport_unknown`(同 mock 注入)
+
+**实施分期(轻量,1-2 phase):**
+
+- **Phase 1**:`element_filter.ts` 新 module + zod 共享 schema + 单元测试;
+  list_elements 接入 filter + truncated/warnings + unfilteredCount + filteredCount;
+  capture 接入 filter + 边界 reject + capture event/commands.jsonl 字段
+  (含 `filteredElementCount` 镜像)。无独立 phase audit,合并到 final audit。
+- **Phase 2**:codex post-impl audit + 真机 acceptance(Poppo Vone 几屏跑下来
+  filter 各字段 + truncate path)。GO 后 cut **`v0.5.2`**。
+
+**Release 节奏:**
+
+- 单 cut,版本号 **`v0.5.2`**(per handoff "cut 0.5.2 或并 v2-G.1 同 cut" 的前者)。
+- release note 显著提示三点:
+  - `list_elements` 加 `filter` + `limit` + `unfilteredCount` + `filteredCount` +
+    `truncated` 字段(向后兼容,全 optional)
+  - `capture` 在 `annotateElements:true` 路径上接受同样 `filter` + `limit` 字段;
+    `annotation` 块加 `unfilteredCount` / `filteredCount` / `truncated?` /
+    `warnings?`
+  - `list_elements` event 增 `unfilteredCount` / `filteredCount` / `filter?` /
+    `limit?` / `truncated?` 字段(audit consumers 可能要适配)
+
+**与 v2-G.1 sprint 隔离:** v0.5.1 已经 cut。本 amendment 与 v2-G.1 contract 完全
+独立(filter 在 UI 探索面;preview 在 evidence 读面),不会互扰。

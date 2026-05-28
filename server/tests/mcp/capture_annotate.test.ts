@@ -6,6 +6,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PNG } from "pngjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { probeViewport } from "../../src/adb/viewport.ts";
 import { decodePng } from "../../src/annotate/paint.ts";
 import { registerCapture } from "../../src/mcp/tools/capture.ts";
 import { registerStartSession } from "../../src/mcp/tools/start_session.ts";
@@ -61,6 +62,7 @@ vi.mock("../../src/adb/devices.ts", () => ({
     { deviceSerial: "FAKEDEV0", state: "device", model: "fake", apiLevel: 33, abi: "arm64-v8a" },
   ],
 }));
+vi.mock("../../src/adb/viewport.ts", () => ({ probeViewport: vi.fn() }));
 vi.mock("../../src/adb/app.ts", () => ({
   getCurrentUser: async () => 0,
   getPackageVersion: async () => ({ versionName: "1.0.0", versionCode: "100" }),
@@ -339,5 +341,181 @@ describe("capture annotateElements (v2-F.1)", () => {
     // matches whatever uiSummary saw (3 clickable nodes in FAKE_UI_XML).
     expect(sc.annotation.elementCount).toBe(3);
     expect(sc.uiSummary.nodeCount).toBeGreaterThan(0);
+  });
+
+  // ──────────────────────── v2-F.3 filter / limit ────────────────────────
+  // FAKE_UI_XML has 3 elements:
+  //   1. text:"Login" contentDesc:"" bounds [0,0]-[400,100]    clickable
+  //   2. text:"Cancel" contentDesc:"" bounds [0,200]-[50,250]   clickable
+  //   3. text:"" contentDesc:"Search" bounds [100,500]-[900,1200] clickable
+
+  it("v2-F.3: filter.textContains narrows annotation.elements", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        annotateElements: true,
+        filter: { textContains: "login" },
+      },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r) as {
+      annotation: {
+        elements: Array<{ resourceId: string; annotationId: number }>;
+        elementCount: number;
+        unfilteredCount: number;
+        filteredCount: number;
+        truncated?: true;
+        error: string | null;
+      };
+    };
+    expect(sc.annotation.error).toBeNull();
+    expect(sc.annotation.unfilteredCount).toBe(3);
+    expect(sc.annotation.filteredCount).toBe(1);
+    expect(sc.annotation.elementCount).toBe(1);
+    expect(sc.annotation.elements[0]?.resourceId).toBe("com.x:id/btn_login");
+    expect(sc.annotation.elements[0]?.annotationId).toBe(1);
+    expect(sc.annotation.truncated).toBeUndefined();
+  });
+
+  it("v2-F.3: filter.contentDescContains reaches icon-only elements (text='', contentDesc set)", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        annotateElements: true,
+        filter: { contentDescContains: "search" },
+      },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r) as {
+      annotation: { elements: Array<{ resourceId: string }>; filteredCount: number };
+    };
+    expect(sc.annotation.filteredCount).toBe(1);
+    expect(sc.annotation.elements[0]?.resourceId).toBe("com.x:id/search");
+  });
+
+  it("v2-F.3: limit truncates post-filter; annotation.truncated:true + filteredCount > elementCount", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        annotateElements: true,
+        filter: { clickableOnly: true },
+        limit: 2,
+      },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r) as {
+      annotation: {
+        elementCount: number;
+        unfilteredCount: number;
+        filteredCount: number;
+        truncated?: true;
+      };
+    };
+    expect(sc.annotation.unfilteredCount).toBe(3);
+    expect(sc.annotation.filteredCount).toBe(3);
+    expect(sc.annotation.elementCount).toBe(2);
+    expect(sc.annotation.truncated).toBe(true);
+  });
+
+  it("v2-F.3: filter without annotateElements:true → query_malformed", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        filter: { textContains: "login" },
+        // annotateElements omitted
+      },
+    });
+    expect(r.isError).toBe(true);
+    const err = JSON.parse(callText(r)) as { error: string };
+    expect(err.error).toBe("query_malformed");
+  });
+
+  it("v2-F.3: limit without annotateElements:true → query_malformed", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        limit: 5,
+        // annotateElements omitted; filter omitted; only an explicit limit
+      },
+    });
+    expect(r.isError).toBe(true);
+    const err = JSON.parse(callText(r)) as { error: string };
+    expect(err.error).toBe("query_malformed");
+  });
+
+  it("v2-F.3: omitting filter/limit on capture w/o annotateElements is still valid (v2-F.1 behavior unchanged)", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: { runId: h.runId, kinds: ["screenshot"] },
+    });
+    expect(r.isError).toBeFalsy();
+    expect(structured(r).annotation).toBeUndefined();
+  });
+
+  it("v2-F.3: inViewport probes viewport; intersect drops fully-outside elements", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    // Narrow viewport so the third element (bottom 1200) falls outside.
+    vi.mocked(probeViewport).mockResolvedValue({ w: 1080, h: 450 });
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        annotateElements: true,
+        filter: { inViewport: true },
+      },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r) as {
+      annotation: { unfilteredCount: number; filteredCount: number; warnings?: string[] };
+    };
+    expect(sc.annotation.unfilteredCount).toBe(3);
+    expect(sc.annotation.filteredCount).toBe(2);
+    expect(sc.annotation.warnings).toBeUndefined();
+  });
+
+  it("v2-F.3: viewport_unknown surfaces in annotation.warnings when wm size probe fails", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    vi.mocked(probeViewport).mockResolvedValue(null);
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        annotateElements: true,
+        filter: { inViewport: true },
+      },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r) as {
+      annotation: { filteredCount: number; warnings?: string[] };
+    };
+    // inViewport no-op'd → every element passes the filter.
+    expect(sc.annotation.filteredCount).toBe(3);
+    expect(sc.annotation.warnings).toEqual(["viewport_unknown"]);
   });
 });

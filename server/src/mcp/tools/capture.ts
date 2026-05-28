@@ -5,8 +5,14 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getForegroundActivity } from "../../adb/app.ts";
 import { captureScreenshot, captureUiDump } from "../../adb/capture.ts";
+import { probeViewport } from "../../adb/viewport.ts";
 import { AnnotateError, annotatePng } from "../../annotate/annotate.ts";
 import type { SessionManager } from "../../session/manager.ts";
+import {
+  ElementFilterSchema,
+  applyElementFilter,
+  elementLimitSchema,
+} from "../../ui/element_filter.ts";
 import { CollectElementsError, collectCurrentElements } from "../../ui/list_elements.ts";
 import { summarizeUiXml } from "../../ui/summary.ts";
 import { registerDebugTool } from "../register.ts";
@@ -25,6 +31,12 @@ const inputSchema = z
     label: z.string().min(1, "label must be non-empty").max(200, "label too long").optional(),
     // v2-F.1. default false → keeps v2-F.0 capture behavior byte-identical.
     annotateElements: z.boolean().optional(),
+    // v2-F.3 — server-side narrowing on the annotate path. Shared schema
+    // with `list_elements`. Has effect only when `annotateElements:true`;
+    // passing `filter` or `limit` while `annotateElements !== true` is a
+    // `query_malformed` (see handler guard).
+    filter: ElementFilterSchema.optional(),
+    limit: elementLimitSchema,
   })
   .strict();
 
@@ -76,20 +88,27 @@ const annotationSchema = z
     elementCount: z.number().int().nonnegative(),
     error: z.string().nullable(),
     elements: z.array(annotationElementSchema),
+    // v2-F.3 — pre/post-filter/truncate counts mirror list_elements; agent
+    // can spot truncation via `filteredCount > elementCount`.
+    unfilteredCount: z.number().int().nonnegative(),
+    filteredCount: z.number().int().nonnegative(),
+    truncated: z.literal(true).optional(),
+    // viewport_unknown lives here (capture top-level outputSchema stays strict
+    // per v0.5.0 ship).
+    warnings: z.array(z.string()).optional(),
   })
   .strict()
   .refine(
-    // design lock § annotationSchema.refine — 4 invariants:
-    //   (a) screenshotPath:null ⇔ error:string  (bi-directional)
-    //   (b) error:string ⇒ elements.length === 0 ∧ elementCount === 0
-    //   (c) elementCount === elements.length (success and failure)
+    // design lock § annotationSchema.refine — 4 invariants (v2-F.1) + v2-F.3
+    // adds: filteredCount >= elementCount (truncation never grows the set).
     (a) =>
       (a.screenshotPath === null) === (a.error !== null) &&
       (a.error === null || (a.elements.length === 0 && a.elementCount === 0)) &&
-      a.elementCount === a.elements.length,
+      a.elementCount === a.elements.length &&
+      a.filteredCount >= a.elementCount,
     {
       message:
-        "annotation invariants violated (screenshotPath ↔ error, error ⇒ empty, elementCount ≡ elements.length)",
+        "annotation invariants violated (screenshotPath ↔ error, error ⇒ empty, elementCount ≡ elements.length, filteredCount >= elementCount)",
     },
   );
 
@@ -124,7 +143,14 @@ function mintCaptureId(): string {
 }
 
 function emptyAnnotation(error: string): AnnotationStructured {
-  return { screenshotPath: null, elementCount: 0, error, elements: [] };
+  return {
+    screenshotPath: null,
+    elementCount: 0,
+    error,
+    elements: [],
+    unfilteredCount: 0,
+    filteredCount: 0,
+  };
 }
 
 export function registerCapture(server: McpServer, manager: SessionManager): void {
@@ -159,6 +185,22 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
         throw new ToolDomainError(
           "query_malformed",
           "annotateElements:true requires kinds to include 'screenshot'.",
+          { runId: input.runId },
+        );
+      }
+      // v2-F.3 reject gate: filter / limit are annotate-only inputs.
+      // `limit` has a zod `.default(100)` so it's always defined post-parse;
+      // we only count an explicit caller-supplied value as "set" by looking
+      // at the parsed limit being non-default OR by treating `filter` /
+      // `limit` distinct from default as caller intent. Cleanest:
+      // `filter !== undefined` is unambiguous; `limit !== 100` is treated as
+      // explicit. Per F3-Q7, BOTH (filter ∪ limit) without annotateElements
+      // → query_malformed.
+      const explicitLimit = input.limit !== 100;
+      if (!wantsAnnotate && (input.filter !== undefined || explicitLimit)) {
+        throw new ToolDomainError(
+          "query_malformed",
+          "filter / limit on capture only take effect when annotateElements:true.",
           { runId: input.runId },
         );
       }
@@ -237,15 +279,29 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
           // We enforced kinds.includes("screenshot") above; this is a handler bug.
           throw new Error("capture annotate path reached without screenshot bytes.");
         } else {
+          // v2-F.3: filter + truncate happens BEFORE annotate so the badge
+          // numbering matches the returned `annotation.elements`. Probe
+          // viewport only if filter asks for it; probe failure is soft.
+          const wantsViewport = input.filter?.inViewport === true;
+          const viewport = wantsViewport ? await probeViewport(session.deviceSerial) : null;
+          const viewportProbeFailed = wantsViewport && viewport === null;
+          const unfiltered = uiElements;
+          const filtered = applyElementFilter(unfiltered, input.filter, viewport);
+          const trimmed = filtered.length > input.limit ? filtered.slice(0, input.limit) : filtered;
+          const annotateInputElements = trimmed;
+          const truncatedAnnotation = filtered.length > trimmed.length;
+          const annotationWarnings: string[] = [];
+          if (viewportProbeFailed) annotationWarnings.push("viewport_unknown");
+
           const annotatedPath = join(artifactsDir, `screenshot-${captureId}-annotated.png`);
           try {
-            if (uiElements.length === 0) {
+            if (annotateInputElements.length === 0) {
               // design lock § S2 — empty element list writes a byte-identical
               // copy of the original screenshot (no decode/re-encode round trip,
               // which pngjs does not guarantee to be byte-stable).
               await writeFile(annotatedPath, screenshotBytes);
             } else {
-              const inputs = uiElements.map((el, i) => ({
+              const inputs = annotateInputElements.map((el, i) => ({
                 annotationId: i + 1,
                 bounds: {
                   l: el.bounds.left,
@@ -259,11 +315,15 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
             }
             annotation = {
               screenshotPath: annotatedPath,
-              elementCount: uiElements.length,
+              elementCount: annotateInputElements.length,
               error: null,
-              elements: uiElements.map((el, i) => ({ annotationId: i + 1, ...el })),
+              elements: annotateInputElements.map((el, i) => ({ annotationId: i + 1, ...el })),
+              unfilteredCount: unfiltered.length,
+              filteredCount: filtered.length,
+              ...(truncatedAnnotation ? { truncated: true as const } : {}),
+              ...(annotationWarnings.length > 0 ? { warnings: annotationWarnings } : {}),
             };
-            annotatedElementCount = uiElements.length;
+            annotatedElementCount = annotateInputElements.length;
           } catch (err) {
             // ONLY AnnotateError soft-degrades; everything else (writeFile IO,
             // pngjs unexpected throw, programmer bug) propagates as a real tool

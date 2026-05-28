@@ -6,6 +6,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureUiDump } from "../../src/adb/capture.ts";
+import { probeViewport } from "../../src/adb/viewport.ts";
 import { registerListElements } from "../../src/mcp/tools/list_elements.ts";
 import { registerStartSession } from "../../src/mcp/tools/start_session.ts";
 import { SessionManager } from "../../src/session/manager.ts";
@@ -31,6 +32,7 @@ vi.mock("../../src/adb/app.ts", () => ({
   getForegroundActivity: async () => ({ activity: "com.example.elist/.Main", foreground: true }),
 }));
 vi.mock("../../src/adb/capture.ts", () => ({ captureUiDump: vi.fn() }));
+vi.mock("../../src/adb/viewport.ts", () => ({ probeViewport: vi.fn() }));
 vi.mock("../../src/logcat/channel.ts", () => ({
   LogcatChannel: {
     start: async () => ({
@@ -250,5 +252,180 @@ describe("android_debug_list_elements", () => {
     });
     expect(r.isError).toBe(true);
     expect(JSON.parse(callText(r)).error).toBe("no_active_session");
+  });
+
+  // ────────── v2-F.3 filter / limit / truncated / viewport_unknown ──────────
+
+  // Three buttons, one container (filtered out as not useful).
+  const XML_THREE_BUTTONS =
+    '<hierarchy><node class="android.widget.FrameLayout" package="com.example.elist" bounds="[0,0][1000,2000]">' +
+    '<node class="android.widget.Button" package="com.example.elist" resource-id="com.example.elist:id/login" clickable="true" bounds="[100,100][300,200]" text="Login" />' +
+    '<node class="android.widget.Button" package="com.example.elist" resource-id="com.example.elist:id/cancel" clickable="true" bounds="[100,300][300,400]" text="Cancel" />' +
+    '<node class="android.widget.ImageButton" package="com.example.elist" resource-id="com.example.elist:id/search" clickable="true" bounds="[100,500][300,600]" content-desc="Search" />' +
+    "</node></hierarchy>";
+
+  it("filter.clickableOnly + filter.textContains compose as AND (no-op for non-matching)", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    vi.mocked(captureUiDump).mockResolvedValue({ ok: true, xml: XML_THREE_BUTTONS, detail: "ok" });
+
+    const r = await h.client.callTool({
+      name: "android_debug_list_elements",
+      arguments: {
+        runId,
+        filter: { clickableOnly: true, textContains: "login" },
+      },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    expect(sc.unfilteredCount).toBe(3);
+    expect(sc.filteredCount).toBe(1);
+    expect(sc.elementCount).toBe(1);
+    const elements = sc.elements as Array<Record<string, unknown>>;
+    expect(elements[0]?.resourceId).toBe("com.example.elist:id/login");
+    expect(sc.truncated).toBeUndefined();
+    expect(sc.warnings).toBeUndefined();
+  });
+
+  it("filter.contentDescContains reaches icon-only elements (text empty, contentDesc set)", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    vi.mocked(captureUiDump).mockResolvedValue({ ok: true, xml: XML_THREE_BUTTONS, detail: "ok" });
+
+    const r = await h.client.callTool({
+      name: "android_debug_list_elements",
+      arguments: { runId, filter: { contentDescContains: "search" } },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    const elements = sc.elements as Array<Record<string, unknown>>;
+    expect(elements).toHaveLength(1);
+    expect(elements[0]?.resourceId).toBe("com.example.elist:id/search");
+  });
+
+  it("limit truncates post-filter; truncated:true reflects filteredCount > elementCount", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    vi.mocked(captureUiDump).mockResolvedValue({ ok: true, xml: XML_THREE_BUTTONS, detail: "ok" });
+
+    const r = await h.client.callTool({
+      name: "android_debug_list_elements",
+      arguments: { runId, filter: { clickableOnly: true }, limit: 2 },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    expect(sc.unfilteredCount).toBe(3);
+    expect(sc.filteredCount).toBe(3);
+    expect(sc.elementCount).toBe(2);
+    expect(sc.truncated).toBe(true);
+  });
+
+  it("truncated false-positive regression: filter narrows to 1, limit=1 → no truncated flag", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    vi.mocked(captureUiDump).mockResolvedValue({ ok: true, xml: XML_THREE_BUTTONS, detail: "ok" });
+
+    const r = await h.client.callTool({
+      name: "android_debug_list_elements",
+      arguments: { runId, filter: { textContains: "Login" }, limit: 1 },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    expect(sc.unfilteredCount).toBe(3);
+    expect(sc.filteredCount).toBe(1);
+    expect(sc.elementCount).toBe(1);
+    // Pre-Round-1 formula `filteredCount === limit < unfilteredCount` would
+    // have falsely returned truncated:true; the locked formula
+    // `filteredCount > elementCount` correctly suppresses it.
+    expect(sc.truncated).toBeUndefined();
+  });
+
+  it("inViewport:true probes viewport; intersect drops fully-outside elements", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    vi.mocked(captureUiDump).mockResolvedValue({ ok: true, xml: XML_THREE_BUTTONS, detail: "ok" });
+    // Narrow viewport so the third button at y=500-600 falls outside.
+    vi.mocked(probeViewport).mockResolvedValue({ w: 1080, h: 450 });
+
+    const r = await h.client.callTool({
+      name: "android_debug_list_elements",
+      arguments: { runId, filter: { inViewport: true } },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    expect(sc.unfilteredCount).toBe(3);
+    expect(sc.filteredCount).toBe(2);
+    expect(sc.warnings).toBeUndefined();
+  });
+
+  it("viewport_unknown warning when wm size probe fails (filter no-op for inViewport)", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    vi.mocked(captureUiDump).mockResolvedValue({ ok: true, xml: XML_THREE_BUTTONS, detail: "ok" });
+    vi.mocked(probeViewport).mockResolvedValue(null);
+
+    const r = await h.client.callTool({
+      name: "android_debug_list_elements",
+      arguments: { runId, filter: { inViewport: true } },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    // inViewport no-op'd → every element passes the filter.
+    expect(sc.filteredCount).toBe(3);
+    expect(sc.warnings).toEqual(["viewport_unknown"]);
+  });
+
+  it("limit defaults to 100 when omitted (Round 2 zod chain fix)", async () => {
+    const h = await harness();
+    const { runId, runDir } = await startRun(h);
+    vi.mocked(captureUiDump).mockResolvedValue({ ok: true, xml: XML_THREE_BUTTONS, detail: "ok" });
+
+    await h.client.callTool({
+      name: "android_debug_list_elements",
+      arguments: { runId }, // no `limit` passed
+    });
+
+    const commands = readFileSync(join(runDir, "commands.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const row = commands.find((c) => c.tool === "list_elements");
+    expect(row?.limit).toBe(100);
+  });
+
+  it("rejects filter.limit:0 as query_malformed (zod min(1))", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    vi.mocked(captureUiDump).mockResolvedValue({ ok: true, xml: XML_THREE_BUTTONS, detail: "ok" });
+
+    const r = await h.client.callTool({
+      name: "android_debug_list_elements",
+      arguments: { runId, limit: 0 },
+    });
+    expect(r.isError).toBe(true);
+  });
+
+  it("event includes unfilteredCount / filteredCount / filter / limit / truncated", async () => {
+    const h = await harness();
+    const { runId, runDir } = await startRun(h);
+    vi.mocked(captureUiDump).mockResolvedValue({ ok: true, xml: XML_THREE_BUTTONS, detail: "ok" });
+
+    await h.client.callTool({
+      name: "android_debug_list_elements",
+      arguments: { runId, filter: { clickableOnly: true }, limit: 2 },
+    });
+
+    const events = readFileSync(join(runDir, "events.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const listEvent = events.find((e) => e.type === "list_elements");
+    expect(listEvent).toBeDefined();
+    expect(listEvent?.unfilteredCount).toBe(3);
+    expect(listEvent?.filteredCount).toBe(3);
+    expect(listEvent?.elementCount).toBe(2);
+    expect(listEvent?.limit).toBe(2);
+    expect(listEvent?.truncated).toBe(true);
+    expect(listEvent?.filter).toEqual({ clickableOnly: true });
   });
 });
