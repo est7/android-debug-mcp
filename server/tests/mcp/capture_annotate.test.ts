@@ -585,6 +585,149 @@ describe("capture annotateElements (v2-F.1)", () => {
     expect(captureCmd?.truncated).toBeUndefined();
   });
 
+  // ─────────────── v2-F.2 annotationIds subset filter ───────────────
+
+  it("v2-F.2: annotationIds picks a subset; annotationId stays trimmed-ordinal (not renumbered)", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    // FAKE_UI_XML has 3 elements at indices 1/2/3 post-truncate.
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        annotateElements: true,
+        annotationIds: [1, 3],
+      },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r) as {
+      annotation: {
+        elementCount: number;
+        elements: Array<{ annotationId: number; resourceId: string }>;
+        unfilteredCount: number;
+        filteredCount: number;
+        subsetRequested?: number;
+        subsetApplied?: number;
+      };
+    };
+    expect(sc.annotation.elementCount).toBe(2);
+    // F2-Q10: annotationId stays the trimmed ordinal, ascending order.
+    expect(sc.annotation.elements.map((e) => e.annotationId)).toEqual([1, 3]);
+    expect(sc.annotation.subsetRequested).toBe(2);
+    expect(sc.annotation.subsetApplied).toBe(2);
+  });
+
+  it("v2-F.2: annotationIds dedup is silent; subsetRequested reflects pre-dedup length", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        annotateElements: true,
+        annotationIds: [2, 2, 1, 2],
+      },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r) as {
+      annotation: {
+        elements: Array<{ annotationId: number }>;
+        subsetRequested?: number;
+        subsetApplied?: number;
+      };
+    };
+    expect(sc.annotation.subsetRequested).toBe(4);
+    expect(sc.annotation.subsetApplied).toBe(2);
+    expect(sc.annotation.elements.map((e) => e.annotationId)).toEqual([1, 2]);
+  });
+
+  it("v2-F.2: annotationIds out-of-range → query_malformed with available count", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        annotateElements: true,
+        annotationIds: [99],
+      },
+    });
+    expect(r.isError).toBe(true);
+    const err = JSON.parse(callText(r)) as { error: string; message?: string };
+    expect(err.error).toBe("query_malformed");
+  });
+
+  it("v2-F.2: annotationIds without annotateElements:true → query_malformed", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        annotationIds: [1, 2],
+      },
+    });
+    expect(r.isError).toBe(true);
+    const err = JSON.parse(callText(r)) as { error: string };
+    expect(err.error).toBe("query_malformed");
+  });
+
+  it("v2-F.2: subsetRequested / subsetApplied absent when annotationIds omitted", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: { runId: h.runId, kinds: ["screenshot"], annotateElements: true },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r) as {
+      annotation: { subsetRequested?: unknown; subsetApplied?: unknown };
+    };
+    expect(sc.annotation.subsetRequested).toBeUndefined();
+    expect(sc.annotation.subsetApplied).toBeUndefined();
+  });
+
+  it("v2-F.2: audit row carries annotationIds + subsetApplied when subset used", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        annotateElements: true,
+        annotationIds: [2, 3],
+      },
+    });
+    const commands = readFileSync(join(h.runDir, "commands.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const cmd = commands.find((c) => c.tool === "capture" && c.annotated === true);
+    expect(cmd?.annotationIds).toEqual([2, 3]);
+    expect(cmd?.subsetApplied).toBe(2);
+  });
+
+  it("v2-F.2: audit row omits annotationIds/subsetApplied when no subset requested", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: { runId: h.runId, kinds: ["screenshot"], annotateElements: true },
+    });
+    const commands = readFileSync(join(h.runDir, "commands.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const cmd = commands.find((c) => c.tool === "capture" && c.annotated === true);
+    expect(cmd?.annotationIds).toBeUndefined();
+    expect(cmd?.subsetApplied).toBeUndefined();
+  });
+
   it("v2-F.3: viewport_unknown surfaces in annotation.warnings when wm size probe fails", async () => {
     const h = await harness();
     open.push(() => h.shutdown());

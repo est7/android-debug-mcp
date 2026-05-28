@@ -1,5 +1,14 @@
 import { PNG } from "pngjs";
-import { DIGIT_SEGMENTS, type DigitStyle, type SegmentMask } from "./glyphs.ts";
+import {
+  ASCII_GLYPHS,
+  DEFAULT_LABEL_SCALE,
+  DIGIT_SEGMENTS,
+  type DigitStyle,
+  GLYPH_GAP,
+  GLYPH_NATIVE_HEIGHT,
+  GLYPH_NATIVE_WIDTH,
+  type SegmentMask,
+} from "./glyphs.ts";
 
 /**
  * Maximum decoded pixel count. 4096² = 16,777,216 — covers the Poppo / Vone /
@@ -198,5 +207,64 @@ export function drawNumber(
   }
 }
 
+/**
+ * v2-F.2 — render one ASCII glyph at (x, y), `scale` px per native bit, in
+ * `color`. Unknown chars (not in `ASCII_GLYPHS`) silently no-op so a single
+ * exotic char in a class name doesn't break the whole label paint pass.
+ * `setPixel` is intentionally not called — every `1` in the row mask is
+ * stamped as a `scale × scale` filled square via `fillRect`, which already
+ * clips to image bounds.
+ */
+export function drawChar(
+  img: ImageBuffer,
+  x: number,
+  y: number,
+  ch: string,
+  scale: number,
+  c: RGBA,
+): void {
+  const rows = ASCII_GLYPHS[ch];
+  if (rows === undefined) return;
+  for (let row = 0; row < rows.length; row++) {
+    const mask = rows[row] ?? 0;
+    for (let col = 0; col < GLYPH_NATIVE_WIDTH; col++) {
+      // MSB = leftmost column (col 0).
+      const bit = (mask >> (GLYPH_NATIVE_WIDTH - 1 - col)) & 1;
+      if (bit === 1) {
+        const px = x + col * scale;
+        const py = y + row * scale;
+        fillRect(img, px, py, px + scale, py + scale, c);
+      }
+    }
+  }
+}
+
+/**
+ * v2-F.2 — render a string of ASCII glyphs at (x, y), `scale` px per native
+ * bit, gap `GLYPH_GAP * scale` between consecutive chars. Mirrors
+ * {@link drawNumber} for the digit renderer. Cursor advances by
+ * `5 * scale + GLYPH_GAP` per char regardless of whether the char is in the
+ * atlas, so spacing stays uniform when a class name has an unknown char.
+ */
+export function drawText(
+  img: ImageBuffer,
+  x: number,
+  y: number,
+  s: string,
+  scale: number,
+  c: RGBA,
+): void {
+  let cursor = x;
+  for (const ch of s) {
+    drawChar(img, cursor, y, ch, scale, c);
+    cursor += GLYPH_NATIVE_WIDTH * scale + GLYPH_GAP;
+  }
+}
+
 // setPixel is intentionally not exported — primitive consumer is fillRect.
 void setPixel;
+// Re-export glyph constants for callers that want to compose layouts without
+// double-importing glyphs.ts.
+export { DEFAULT_LABEL_SCALE, GLYPH_GAP, GLYPH_NATIVE_HEIGHT, GLYPH_NATIVE_WIDTH };
+void GLYPH_NATIVE_HEIGHT;
+void DEFAULT_LABEL_SCALE;

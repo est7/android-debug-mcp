@@ -6,7 +6,7 @@ import { z } from "zod";
 import { getForegroundActivity } from "../../adb/app.ts";
 import { captureScreenshot, captureUiDump } from "../../adb/capture.ts";
 import { probeViewport } from "../../adb/viewport.ts";
-import { AnnotateError, annotatePng } from "../../annotate/annotate.ts";
+import { AnnotateError, annotatePng, classShortLabel } from "../../annotate/annotate.ts";
 import type { SessionManager } from "../../session/manager.ts";
 import {
   ElementFilterSchema,
@@ -38,6 +38,12 @@ const inputSchema = z
     // applies the default itself on the annotate path.
     filter: ElementFilterSchema.optional(),
     limit: captureElementLimitSchema,
+    // v2-F.2 § F2-Q7 — post-filter+truncate annotation subset. Each id is a
+    // 1-based annotationId pointing into the freshly-collected, filter+
+    // truncate-reduced element list FOR THIS CALL. Stale-ordinal model
+    // (§ F2-Q7b): NOT durable element identity; agent must re-verify
+    // bounds/text/class after each call if the UI may have changed.
+    annotationIds: z.array(z.number().int().positive()).min(1).max(100).optional(),
   })
   .strict();
 
@@ -97,19 +103,29 @@ const annotationSchema = z
     // viewport_unknown lives here (capture top-level outputSchema stays strict
     // per v0.5.0 ship).
     warnings: z.array(z.string()).optional(),
+    // v2-F.2 § F2-Q11 — subset audit. Present iff caller supplied
+    // `annotationIds`; `subsetRequested` = original array length (pre-dedup),
+    // `subsetApplied` = unique-and-in-range length actually drawn.
+    subsetRequested: z.number().int().nonnegative().optional(),
+    subsetApplied: z.number().int().nonnegative().optional(),
   })
   .strict()
   .refine(
     // design lock § annotationSchema.refine — 4 invariants (v2-F.1) + v2-F.3
-    // adds: filteredCount >= elementCount (truncation never grows the set).
-    (a) =>
-      (a.screenshotPath === null) === (a.error !== null) &&
-      (a.error === null || (a.elements.length === 0 && a.elementCount === 0)) &&
-      a.elementCount === a.elements.length &&
-      a.filteredCount >= a.elementCount,
+    // adds: filteredCount >= elementCount; v2-F.2 adds: subsetRequested
+    // present iff subsetApplied present (both or neither).
+    (a) => {
+      const baseInvariants =
+        (a.screenshotPath === null) === (a.error !== null) &&
+        (a.error === null || (a.elements.length === 0 && a.elementCount === 0)) &&
+        a.elementCount === a.elements.length &&
+        a.filteredCount >= a.elementCount;
+      const subsetPair = (a.subsetRequested === undefined) === (a.subsetApplied === undefined);
+      return baseInvariants && subsetPair;
+    },
     {
       message:
-        "annotation invariants violated (screenshotPath ↔ error, error ⇒ empty, elementCount ≡ elements.length, filteredCount >= elementCount)",
+        "annotation invariants violated (screenshotPath ↔ error, error ⇒ empty, elementCount ≡ elements.length, filteredCount >= elementCount, subsetRequested/subsetApplied paired)",
     },
   );
 
@@ -132,10 +148,10 @@ type AnnotationStructured = NonNullable<CaptureStructured["annotation"]>;
 const description = [
   "Capture a screenshot and/or a UI hierarchy dump of the active session's device.",
   "",
-  "Use when: the agent wants visual or structural evidence of the current screen — confirm a repro state, or inspect the view tree. Pass `annotateElements:true` (requires `screenshot` in kinds) to also receive a numbered-box overlay PNG + an inline `{annotationId, center, bounds, …}` mapping; saves a follow-up `list_elements` call when the agent intends to tap something visible.",
-  "Args: `runId`; `kinds` — a non-empty list of `screenshot` and/or `ui_dump`; optional `label`; optional `annotateElements` (default `false`); optional `filter` (`{clickableOnly?, classContains?, textContains?, contentDescContains?, inViewport?}`) and `limit` (1-500, default 100 on the annotate path) which take effect ONLY when `annotateElements:true` and narrow the elements that get badge-drawn + mapped (same semantics as `list_elements` filter — AND composition, case-insensitive substrings, half-open viewport intersect).",
-  'Returns: `{captureId, capturedAt, screenshotPath?, uiDumpPath?, uiSummary?, annotation?}`; `annotation` is present iff `annotateElements:true` and holds `{screenshotPath, elementCount, error, elements, unfilteredCount, filteredCount, truncated?, warnings?}`. `unfilteredCount` is the raw dump size; `filteredCount` is post-filter pre-truncate; `elementCount === elements.length` is post-truncate. `truncated:true` means `limit` cut at least one filter match (agent should tighten `filter` and re-call). `warnings:["viewport_unknown"]` surfaces when `inViewport:true` was requested but `wm size` could not be probed. On soft-degrade, `annotation.screenshotPath:null` + `annotation.error:<code>` (counts all 0); the raw `screenshotPath` is unaffected.',
-  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `adb_not_found` when the adb binary is missing; `adb_command_failed` when a `screencap` / `uiautomator` adb command fails. `query_malformed` when `annotateElements:true` without `screenshot` in kinds, OR when `filter` / `limit` is supplied without `annotateElements:true`, OR when `filter` / `limit` fails per-field validation. A failed ui_dump yields `uiDumpPath:null` (not an error); annotate-side failure surfaces in `annotation.error`, not as a tool error.",
+  "Use when: the agent wants visual or structural evidence of the current screen — confirm a repro state, or inspect the view tree. Pass `annotateElements:true` (requires `screenshot` in kinds) to also receive a numbered-box overlay PNG + an inline `{annotationId, center, bounds, …}` mapping; saves a follow-up `list_elements` call when the agent intends to tap something visible. v2-F.2 — each badge also carries a short ASCII class label (e.g. `Button:1`, `EditText:5`) derived from the element's class FQCN so the agent can identify badge purpose without consulting the mapping.",
+  "Args: `runId`; `kinds` — a non-empty list of `screenshot` and/or `ui_dump`; optional `label`; optional `annotateElements` (default `false`); optional `filter` (`{clickableOnly?, classContains?, textContains?, contentDescContains?, inViewport?}`) and `limit` (1-500, default 100 on the annotate path) which take effect ONLY when `annotateElements:true` and narrow the elements that get badge-drawn + mapped (same semantics as `list_elements` filter — AND composition, case-insensitive substrings, half-open viewport intersect); optional `annotationIds: number[]` (1-100 positive ints, annotate-only) which further trims the badge-drawn set to the listed annotationIds — applied AFTER `filter` + `limit`, accepts 1-based ordinals into the post-filter post-truncate list. Stale-ordinal model: `annotationIds` reference the FRESHLY collected list of THIS call only, never a durable element identity; if the UI changed since the agent saw badge `N`, the new badge `N` may be a different element. Always verify `annotation.elements[i].bounds` / `text` / `class` before tapping.",
+  'Returns: `{captureId, capturedAt, screenshotPath?, uiDumpPath?, uiSummary?, annotation?}`; `annotation` is present iff `annotateElements:true` and holds `{screenshotPath, elementCount, error, elements, unfilteredCount, filteredCount, truncated?, warnings?, subsetRequested?, subsetApplied?}`. `unfilteredCount` is the raw dump size; `filteredCount` is post-filter pre-truncate; `elementCount === elements.length` is post-truncate AND post-subset. `truncated:true` means `limit` cut at least one filter match (agent should tighten `filter` and re-call). `warnings:["viewport_unknown"]` surfaces when `inViewport:true` was requested but `wm size` could not be probed. When `annotationIds` is supplied, `subsetRequested` is the caller-array length (pre-dedup) and `subsetApplied` is the unique-in-range count actually drawn; `annotation.elements[i].annotationId` keeps its post-filter post-truncate ordinal (not renumbered 1..len(subset)) so the badge "3" you see in the image matches `elements[*].annotationId === 3`. On soft-degrade, `annotation.screenshotPath:null` + `annotation.error:<code>` (counts all 0); the raw `screenshotPath` is unaffected.',
+  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `adb_not_found` when the adb binary is missing; `adb_command_failed` when a `screencap` / `uiautomator` adb command fails. `query_malformed` when `annotateElements:true` without `screenshot` in kinds, OR when `filter` / `limit` / `annotationIds` is supplied without `annotateElements:true`, OR when `filter` / `limit` fails per-field validation, OR when any `annotationIds[i]` falls outside `[1, filteredCount-after-truncate]` (the error message names the out-of-range id and the available count). A failed ui_dump yields `uiDumpPath:null` (not an error); annotate-side failure surfaces in `annotation.error`, not as a tool error.",
 ].join("\n");
 
 /** Capture id: 12 hex chars — filename-safe and carries no caller-supplied data. */
@@ -143,7 +159,7 @@ function mintCaptureId(): string {
   return randomBytes(6).toString("hex");
 }
 
-function emptyAnnotation(error: string): AnnotationStructured {
+function emptyAnnotation(error: string, callerProvidedSubset: boolean): AnnotationStructured {
   return {
     screenshotPath: null,
     elementCount: 0,
@@ -151,7 +167,48 @@ function emptyAnnotation(error: string): AnnotationStructured {
     elements: [],
     unfilteredCount: 0,
     filteredCount: 0,
+    // v2-F.2: pair subsetRequested/subsetApplied. When caller supplied
+    // annotationIds but the path soft-degraded BEFORE we could compute the
+    // subset, surface `subsetRequested = input.annotationIds.length` and
+    // `subsetApplied = 0`. When caller didn't supply, both omitted.
+    ...(callerProvidedSubset ? { subsetRequested: 0, subsetApplied: 0 } : {}),
   };
+}
+
+/** Dedup + range-validate annotationIds; throw query_malformed on out-of-range.
+ *  Returns the unique subset (Set order = ascending) AND the requested length
+ *  (pre-dedup) for audit. */
+function applyAnnotationIdsSubset(
+  filteredTruncated: ReturnType<typeof applyElementFilter>,
+  annotationIds: readonly number[],
+  runId: string,
+): {
+  readonly subset: typeof filteredTruncated;
+  readonly subsetRequested: number;
+  readonly subsetApplied: number;
+} {
+  const subsetRequested = annotationIds.length;
+  // Range check first (any single out-of-range id → query_malformed).
+  for (const id of annotationIds) {
+    if (id < 1 || id > filteredTruncated.length) {
+      throw new ToolDomainError(
+        "query_malformed",
+        `annotationId ${id} out of range; current filter+truncate yields ${filteredTruncated.length} elements`,
+        { runId, annotationId: id, available: filteredTruncated.length },
+      );
+    }
+  }
+  // Dedup; iterate ascending so output order is deterministic by id.
+  const unique = Array.from(new Set(annotationIds)).sort((a, b) => a - b);
+  const subset = unique.map((id) => {
+    const el = filteredTruncated[id - 1];
+    if (el === undefined) {
+      // Defensive — range check above should make this unreachable.
+      throw new Error(`v2-F.2 subset assertion: annotationId ${id} unexpectedly missing`);
+    }
+    return el;
+  });
+  return { subset, subsetRequested, subsetApplied: subset.length };
 }
 
 export function registerCapture(server: McpServer, manager: SessionManager): void {
@@ -189,17 +246,23 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
           { runId: input.runId },
         );
       }
-      // v2-F.3 reject gate (Round 3 amendment): `filter` and `limit` are
+      // v2-F.3 reject gate (Round 3 amendment): `filter` / `limit` are
       // annotate-only inputs. `limit` uses `captureElementLimitSchema`
       // (raw optional, no default), so `input.limit !== undefined`
       // unambiguously means "caller supplied a value" — including the
       // corner case `{limit:100}` that the v0.5.2 default-equality check
       // missed. F3-Q7: `wantsAnnotate === false && (filter !== undefined
-      // || limit !== undefined) -> query_malformed`.
-      if (!wantsAnnotate && (input.filter !== undefined || input.limit !== undefined)) {
+      // || limit !== undefined) -> query_malformed`. v2-F.2 § F2-Q8 adds
+      // `annotationIds` to the same guard.
+      if (
+        !wantsAnnotate &&
+        (input.filter !== undefined ||
+          input.limit !== undefined ||
+          input.annotationIds !== undefined)
+      ) {
         throw new ToolDomainError(
           "query_malformed",
-          "filter / limit on capture only take effect when annotateElements:true.",
+          "filter / limit / annotationIds on capture only take effect when annotateElements:true.",
           { runId: input.runId },
         );
       }
@@ -219,6 +282,10 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
       let auditUnfilteredCount = 0;
       let auditFilteredCount = 0;
       let auditTruncated = false;
+      // v2-F.2 subset audit. Only emitted to audit row when caller supplied
+      // `annotationIds`; surfaced in annotation.subsetRequested/subsetApplied.
+      const callerProvidedSubset = input.annotationIds !== undefined;
+      let auditSubsetApplied: number | null = null;
 
       let screenshotBytes: Buffer | null = null;
       if (kinds.includes("screenshot")) {
@@ -284,7 +351,7 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
         if (uiElements === null) {
           // collect failed earlier → soft-degrade annotate.
           annotateError = "annotate_elements_unavailable";
-          annotation = emptyAnnotation(annotateError);
+          annotation = emptyAnnotation(annotateError, callerProvidedSubset);
         } else if (screenshotBytes === null) {
           // We enforced kinds.includes("screenshot") above; this is a handler bug.
           throw new Error("capture annotate path reached without screenshot bytes.");
@@ -299,7 +366,6 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
           const filtered = applyElementFilter(unfiltered, input.filter, viewport);
           const trimmed =
             filtered.length > effectiveLimit ? filtered.slice(0, effectiveLimit) : filtered;
-          const annotateInputElements = trimmed;
           const truncatedAnnotation = filtered.length > trimmed.length;
           const annotationWarnings: string[] = [];
           if (viewportProbeFailed) annotationWarnings.push("viewport_unknown");
@@ -310,37 +376,74 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
           auditFilteredCount = filtered.length;
           auditTruncated = truncatedAnnotation;
 
+          // v2-F.2 § F2-Q7 — apply post-filter+truncate annotationIds subset.
+          // `trimmed[i]` has annotationId `i+1` (1-based post-truncate ordinal).
+          // When caller passes annotationIds, range-validate, dedup, sort
+          // ascending — annotation.elements goes out in ascending order per
+          // F2-Q9, and annotationId stays the trimmed ordinal (not renumbered
+          // 1..len(subset)) per F2-Q10.
+          let paintElements: Array<{
+            annotationId: number;
+            el: (typeof trimmed)[number];
+          }>;
+          let subsetRequested: number | null = null;
+          let subsetApplied: number | null = null;
+          if (input.annotationIds !== undefined) {
+            const subset = applyAnnotationIdsSubset(trimmed, input.annotationIds, input.runId);
+            subsetRequested = subset.subsetRequested;
+            subsetApplied = subset.subsetApplied;
+            auditSubsetApplied = subset.subsetApplied;
+            // Recompute annotationId from the ORIGINAL trimmed position, not
+            // the subset position — `applyAnnotationIdsSubset` already returns
+            // elements in ascending annotationId order, but the IDs we want to
+            // paint are the IDs the caller asked for (= position in trimmed).
+            const sortedIds = Array.from(new Set(input.annotationIds)).sort((a, b) => a - b);
+            paintElements = subset.subset.map((el, i) => ({
+              annotationId: sortedIds[i] as number,
+              el,
+            }));
+          } else {
+            paintElements = trimmed.map((el, i) => ({ annotationId: i + 1, el }));
+          }
+
           const annotatedPath = join(artifactsDir, `screenshot-${captureId}-annotated.png`);
           try {
-            if (annotateInputElements.length === 0) {
+            if (paintElements.length === 0) {
               // design lock § S2 — empty element list writes a byte-identical
               // copy of the original screenshot (no decode/re-encode round trip,
               // which pngjs does not guarantee to be byte-stable).
               await writeFile(annotatedPath, screenshotBytes);
             } else {
-              const inputs = annotateInputElements.map((el, i) => ({
-                annotationId: i + 1,
+              const inputs = paintElements.map(({ annotationId, el }) => ({
+                annotationId,
                 bounds: {
                   l: el.bounds.left,
                   t: el.bounds.top,
                   r: el.bounds.right,
                   b: el.bounds.bottom,
                 },
+                // v2-F.2 § F2-Q3 — derive label from class FQCN; empty class
+                // falls through to label-less badge (renderer treats "" as
+                // digit-only).
+                label: classShortLabel(el.class),
               }));
               const result = annotatePng(screenshotBytes, inputs);
               await writeFile(annotatedPath, result.png);
             }
             annotation = {
               screenshotPath: annotatedPath,
-              elementCount: annotateInputElements.length,
+              elementCount: paintElements.length,
               error: null,
-              elements: annotateInputElements.map((el, i) => ({ annotationId: i + 1, ...el })),
+              elements: paintElements.map(({ annotationId, el }) => ({ annotationId, ...el })),
               unfilteredCount: unfiltered.length,
               filteredCount: filtered.length,
               ...(truncatedAnnotation ? { truncated: true as const } : {}),
               ...(annotationWarnings.length > 0 ? { warnings: annotationWarnings } : {}),
+              ...(subsetRequested !== null
+                ? { subsetRequested, subsetApplied: subsetApplied as number }
+                : {}),
             };
-            annotatedElementCount = annotateInputElements.length;
+            annotatedElementCount = paintElements.length;
           } catch (err) {
             // ONLY AnnotateError soft-degrades; everything else (writeFile IO,
             // pngjs unexpected throw, programmer bug) propagates as a real tool
@@ -348,7 +451,7 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
             // catch-all undocumented `annotate_unknown_failure` code.
             if (err instanceof AnnotateError) {
               annotateError = err.code;
-              annotation = emptyAnnotation(err.code);
+              annotation = emptyAnnotation(err.code, callerProvidedSubset);
             } else {
               throw err;
             }
@@ -367,6 +470,16 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
             ...(input.filter !== undefined ? { filter: input.filter } : {}),
             ...(input.limit !== undefined ? { limit: input.limit } : {}),
             ...(auditTruncated ? { truncated: true as const } : {}),
+            // v2-F.2 § F2-Q11: subset audit. `annotationIds` original (pre-dedup)
+            // array preserved for audit consumer; `subsetApplied` is unique-and-
+            // in-range count (post-dedup). Omitted entirely when caller didn't
+            // supply (audit row stays narrow for the common non-subset path).
+            ...(input.annotationIds !== undefined
+              ? {
+                  annotationIds: input.annotationIds,
+                  subsetApplied: auditSubsetApplied ?? 0,
+                }
+              : {}),
           }
         : {};
 
