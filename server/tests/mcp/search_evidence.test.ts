@@ -505,3 +505,212 @@ describe("inventory", () => {
     expect(names.has("android_debug_extract_evidence_context")).toBe(true);
   });
 });
+
+// --- v2-G.1 Phase 3 — fullRecords + reject path -----------------------------
+
+const PREVIEW_PROFILE_NAME = "test-fake-preview-profile";
+
+const fakeSourceWithPreview: EvidenceSource = {
+  ...fakeSource,
+  previewForAgent(record) {
+    const r = record as unknown as FakeRecord;
+    return {
+      record: { ...r, path: "[preview]" } as unknown as ParsedRecord,
+      truncated: true,
+      fullSizeBytes: 9999,
+      truncatedFields: ["path"],
+    };
+  },
+};
+
+const fakePreviewProfile: Profile = {
+  name: PREVIEW_PROFILE_NAME,
+  evidenceSources: [fakeSourceWithPreview],
+};
+
+describe("v2-G.1 Phase 3 — fullRecords + reject path", () => {
+  beforeEach(() => {
+    registerTestProfile(fakePreviewProfile);
+  });
+  afterEach(() => {
+    unregisterTestProfile(PREVIEW_PROFILE_NAME);
+  });
+
+  it("search_evidence default (no fullRecords): records carry _meta.preview when source declares hook", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    writeProfileJson(h.projectRoot, PREVIEW_PROFILE_NAME);
+    // Re-start under preview profile so the session loads it.
+    await h.client.callTool({ name: "android_debug_stop_session", arguments: { runId } });
+    const r2 = await h.client.callTool({
+      name: "android_debug_start_session",
+      arguments: { packageName: "com.example.v2g_evidence", projectRoot: h.projectRoot },
+    });
+    const newRunId = (structured(r2).runId as string) ?? "";
+
+    const out = await h.client.callTool({
+      name: "android_debug_search_evidence",
+      arguments: { runId: newRunId, query: { source: "fake_src", pathPrefix: "/api" } },
+    });
+    expect(out.isError).toBeFalsy();
+    const sc = structured(out);
+    const records = sc.records as Array<{ path: string; _meta?: { preview?: unknown } }>;
+    expect(records.length).toBeGreaterThan(0);
+    for (const rec of records) {
+      expect(rec.path).toBe("[preview]");
+      expect(rec._meta?.preview).toBeDefined();
+    }
+  });
+
+  it("search_evidence fullRecords:true: records do NOT carry _meta (preview skipped)", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    writeProfileJson(h.projectRoot, PREVIEW_PROFILE_NAME);
+    await h.client.callTool({ name: "android_debug_stop_session", arguments: { runId } });
+    const r2 = await h.client.callTool({
+      name: "android_debug_start_session",
+      arguments: { packageName: "com.example.v2g_evidence", projectRoot: h.projectRoot },
+    });
+    const newRunId = (structured(r2).runId as string) ?? "";
+
+    const out = await h.client.callTool({
+      name: "android_debug_search_evidence",
+      arguments: {
+        runId: newRunId,
+        query: { source: "fake_src", pathPrefix: "/api" },
+        limit: 5, // must be <= 10 when fullRecords:true (Phase 3 reject gate)
+        fullRecords: true,
+      },
+    });
+    expect(out.isError).toBeFalsy();
+    const sc = structured(out);
+    const records = sc.records as Array<{ path: string; _meta?: unknown }>;
+    expect(records.length).toBeGreaterThan(0);
+    for (const rec of records) {
+      expect(rec._meta).toBeUndefined();
+      expect(rec.path).not.toBe("[preview]"); // hook NOT called
+    }
+  });
+
+  it("search_evidence fullRecords:true + limit=10: allowed (boundary inclusive)", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    const out = await h.client.callTool({
+      name: "android_debug_search_evidence",
+      arguments: {
+        runId,
+        query: { source: "fake_src", pathPrefix: "/api" },
+        limit: 10,
+        fullRecords: true,
+      },
+    });
+    // vanilla session → soft-empty (no profile loaded), but the reject gate
+    // runs BEFORE dispatch — limit=10 must NOT trip the reject regardless.
+    expect(out.isError).toBeFalsy();
+  });
+
+  it("search_evidence fullRecords:true + limit=11: rejects as query_malformed", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    const out = await h.client.callTool({
+      name: "android_debug_search_evidence",
+      arguments: {
+        runId,
+        query: { source: "fake_src", pathPrefix: "/api" },
+        limit: 11,
+        fullRecords: true,
+      },
+    });
+    expect(out.isError).toBe(true);
+    expect(callText(out)).toContain("query_malformed");
+    expect(callText(out)).toMatch(/fullRecords:true requires limit <= 10/);
+  });
+
+  it("extract_evidence_context fullRecords:true: records do NOT carry _meta (symmetric with search_evidence)", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    writeProfileJson(h.projectRoot, PREVIEW_PROFILE_NAME);
+    await h.client.callTool({ name: "android_debug_stop_session", arguments: { runId } });
+    const r2 = await h.client.callTool({
+      name: "android_debug_start_session",
+      arguments: { packageName: "com.example.v2g_evidence", projectRoot: h.projectRoot },
+    });
+    const newRunId = (structured(r2).runId as string) ?? "";
+
+    const out = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId: newRunId,
+        markerIsoTs: new Date(1_716_600_000_500).toISOString(),
+        beforeMs: 1000,
+        afterMs: 2000,
+        query: { source: "fake_src" },
+        limit: 5, // must be <= 10 when fullRecords:true (Phase 3 reject gate)
+        fullRecords: true,
+      },
+    });
+    expect(out.isError).toBeFalsy();
+    const sc = structured(out);
+    const records = sc.records as Array<{ path: string; _meta?: unknown }>;
+    expect(records.length).toBeGreaterThan(0);
+    for (const rec of records) {
+      expect(rec._meta).toBeUndefined();
+      expect(rec.path).not.toBe("[preview]");
+    }
+  });
+
+  it("extract_evidence_context fullRecords:true + limit=11: rejects as query_malformed", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    const out = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(1_716_600_000_500).toISOString(),
+        query: { source: "fake_src" },
+        limit: 11,
+        fullRecords: true,
+      },
+    });
+    expect(out.isError).toBe(true);
+    expect(callText(out)).toContain("query_malformed");
+    expect(callText(out)).toMatch(/fullRecords:true requires limit <= 10/);
+  });
+
+  it("extract_evidence_context default: records carry _meta.preview", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    writeProfileJson(h.projectRoot, PREVIEW_PROFILE_NAME);
+    await h.client.callTool({ name: "android_debug_stop_session", arguments: { runId } });
+    const r2 = await h.client.callTool({
+      name: "android_debug_start_session",
+      arguments: { packageName: "com.example.v2g_evidence", projectRoot: h.projectRoot },
+    });
+    const newRunId = (structured(r2).runId as string) ?? "";
+
+    const out = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId: newRunId,
+        markerIsoTs: new Date(1_716_600_000_500).toISOString(),
+        beforeMs: 1000,
+        afterMs: 2000,
+        query: { source: "fake_src" },
+      },
+    });
+    expect(out.isError).toBeFalsy();
+    const sc = structured(out);
+    const records = sc.records as Array<{
+      path: string;
+      _meta?: {
+        preview?: { truncated: boolean; fullSizeBytes: number; truncatedFields: string[] };
+      };
+    }>;
+    expect(records.length).toBeGreaterThan(0);
+    for (const rec of records) {
+      expect(rec._meta?.preview?.truncated).toBe(true);
+      expect(rec._meta?.preview?.fullSizeBytes).toBe(9999);
+      expect(rec._meta?.preview?.truncatedFields).toEqual(["path"]);
+    }
+  });
+});
