@@ -831,4 +831,110 @@ describe("v2-G.1 Phase 3 — fullRecords + reject path", () => {
       expect(rec._meta?.preview?.truncatedFields).toEqual(["path"]);
     }
   });
+
+  // Phase 4 audit advisory: extract_evidence_context shares
+  // emitPullEventsAndCommand + computePreviewAudit with search_evidence, so
+  // the audit-row behavior is structurally symmetric. The three tests below
+  // pin extract's audit row independently — protects against future drift
+  // if either tool's handler diverges from the shared helper contract.
+
+  it("extract_evidence_context commands.jsonl audit row: preview path carries Phase 4 fields", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    writeProfileJson(h.projectRoot, PREVIEW_PROFILE_NAME);
+    await h.client.callTool({ name: "android_debug_stop_session", arguments: { runId } });
+    const r2 = await h.client.callTool({
+      name: "android_debug_start_session",
+      arguments: { packageName: "com.example.v2g_evidence", projectRoot: h.projectRoot },
+    });
+    const sc2 = structured(r2);
+    const newRunId = sc2.runId as string;
+    const runDir = sc2.runDir as string;
+
+    await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId: newRunId,
+        markerIsoTs: new Date(1_716_600_000_500).toISOString(),
+        beforeMs: 1000,
+        afterMs: 2000,
+        query: { source: "fake_src" },
+      },
+    });
+
+    const commandsText = readFileSync(join(runDir, "commands.jsonl"), "utf8");
+    const row = commandsText
+      .split("\n")
+      .filter((l) => l.includes('"tool":"extract_evidence_context"'))
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .pop();
+    expect(row).toBeDefined();
+    expect(row?.fullRecords).toBe(false);
+    expect(row?.truncatedRecords).toBeGreaterThan(0);
+    expect(row?.truncatedFullBytesSum).toBe((row?.truncatedRecords as number) * 9999);
+    expect(row?.savedBytesSum).toBeGreaterThan(0);
+    expect(row?.savedBytesSum).toBeLessThan(row?.truncatedFullBytesSum as number);
+  });
+
+  it("extract_evidence_context commands.jsonl audit row: fullRecords:true → sums all 0", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    writeProfileJson(h.projectRoot, PREVIEW_PROFILE_NAME);
+    await h.client.callTool({ name: "android_debug_stop_session", arguments: { runId } });
+    const r2 = await h.client.callTool({
+      name: "android_debug_start_session",
+      arguments: { packageName: "com.example.v2g_evidence", projectRoot: h.projectRoot },
+    });
+    const sc2 = structured(r2);
+    const newRunId = sc2.runId as string;
+    const runDir = sc2.runDir as string;
+
+    await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId: newRunId,
+        markerIsoTs: new Date(1_716_600_000_500).toISOString(),
+        beforeMs: 1000,
+        afterMs: 2000,
+        query: { source: "fake_src" },
+        limit: 5,
+        fullRecords: true,
+      },
+    });
+
+    const commandsText = readFileSync(join(runDir, "commands.jsonl"), "utf8");
+    const row = commandsText
+      .split("\n")
+      .filter((l) => l.includes('"tool":"extract_evidence_context"'))
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .pop();
+    expect(row?.fullRecords).toBe(true);
+    expect(row?.truncatedRecords).toBe(0);
+    expect(row?.truncatedFullBytesSum).toBe(0);
+    expect(row?.savedBytesSum).toBe(0);
+  });
+
+  it("extract_evidence_context commands.jsonl audit row: vanilla soft-empty still includes Phase 4 fields", async () => {
+    const h = await harness();
+    const { runId, runDir } = await startRun(h); // no profile → soft-empty
+    await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(1_716_600_000_500).toISOString(),
+        query: { source: "fake_src" },
+      },
+    });
+    const commandsText = readFileSync(join(runDir, "commands.jsonl"), "utf8");
+    const row = commandsText
+      .split("\n")
+      .filter((l) => l.includes('"tool":"extract_evidence_context"'))
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .pop();
+    expect(row?.softEmpty).toBe(true);
+    expect(row?.fullRecords).toBe(false);
+    expect(row?.truncatedRecords).toBe(0);
+    expect(row?.truncatedFullBytesSum).toBe(0);
+    expect(row?.savedBytesSum).toBe(0);
+  });
 });

@@ -624,6 +624,28 @@ server/tests/
 
 ## Amendments(codex grill 与 audit 期间 fold-in)
 
+### Phase 4 audit — 2026-05-28 — codex GO(commands.jsonl preview audit verified)
+
+Codex Phase 4 audit GO at `560d837`,1 advisory(non-blocking)+ 1 judgment
+call。Sprint impl chain 完成,下一步真机 acceptance + cut v0.5.1。
+
+**Advisory(fold-in):**
+
+- `extract_evidence_context` audit row 缺独立 fixture —— `emitPullEventsAndCommand`
+  + `computePreviewAudit` 与 `search_evidence` 共享,行为结构对称,但缺 extract-side
+  独立 audit-row assertion 增 future drift 风险。Fold-in:`search_evidence.test.ts`
+  新增 3 个 extract-specific audit-row 测(preview path / fullRecords:true /
+  soft-empty),与 search 4 个 audit-row 测对称。
+
+**Judgment call(codex 自决):**
+
+- Phase 4 dispatch 时我提出"audit row 不区分 hook no-op vs no-hook,是否
+  加 `hookDeclared` 字段?"—— codex 回:**不建议加**。理由:audit row 设计目的
+  是"省了多少 lossy preview 字节"——no-hook 与 hook-no-truncation 对此问题答案
+  都是 `truncatedRecords:0`,无歧义;hook 是否声明的区分在 per-record `_meta`
+  上已经存在(Phase 1 Q11 三栏表)。Phase 4 audit row 不扩 `hookDeclared`,
+  其他字段保持简洁。开放问题悬置 = 拒绝。
+
 ### Phase 2 audit — 2026-05-28 — codex STOP(`tsMsRange` 公契约同步)
 
 Codex Phase 2 audit 抓到 1 条 blocking + 2 条 advisory。Blocking 是 public
