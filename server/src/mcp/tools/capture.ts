@@ -11,7 +11,7 @@ import type { SessionManager } from "../../session/manager.ts";
 import {
   ElementFilterSchema,
   applyElementFilter,
-  elementLimitSchema,
+  captureElementLimitSchema,
 } from "../../ui/element_filter.ts";
 import { CollectElementsError, collectCurrentElements } from "../../ui/list_elements.ts";
 import { summarizeUiXml } from "../../ui/summary.ts";
@@ -31,12 +31,13 @@ const inputSchema = z
     label: z.string().min(1, "label must be non-empty").max(200, "label too long").optional(),
     // v2-F.1. default false → keeps v2-F.0 capture behavior byte-identical.
     annotateElements: z.boolean().optional(),
-    // v2-F.3 — server-side narrowing on the annotate path. Shared schema
-    // with `list_elements`. Has effect only when `annotateElements:true`;
-    // passing `filter` or `limit` while `annotateElements !== true` is a
-    // `query_malformed` (see handler guard).
+    // v2-F.3 — server-side narrowing on the annotate path. Shared
+    // `ElementFilterSchema` with `list_elements`. `limit` is the
+    // raw-optional variant (no schema default) so the F3-Q7 reject can
+    // distinguish caller-supplied `limit:100` from omitted; handler
+    // applies the default itself on the annotate path.
     filter: ElementFilterSchema.optional(),
-    limit: elementLimitSchema,
+    limit: captureElementLimitSchema,
   })
   .strict();
 
@@ -132,9 +133,9 @@ const description = [
   "Capture a screenshot and/or a UI hierarchy dump of the active session's device.",
   "",
   "Use when: the agent wants visual or structural evidence of the current screen — confirm a repro state, or inspect the view tree. Pass `annotateElements:true` (requires `screenshot` in kinds) to also receive a numbered-box overlay PNG + an inline `{annotationId, center, bounds, …}` mapping; saves a follow-up `list_elements` call when the agent intends to tap something visible.",
-  "Args: `runId`; `kinds` — a non-empty list of `screenshot` and/or `ui_dump`; optional `label`; optional `annotateElements` (default `false`).",
-  "Returns: `{captureId, capturedAt, screenshotPath?, uiDumpPath?, uiSummary?, annotation?}`; `annotation` is present iff `annotateElements:true` and holds `{screenshotPath, elementCount, error, elements}`. On soft-degrade, `annotation.screenshotPath:null` + `annotation.error:<code>` while the raw `screenshotPath` is unaffected.",
-  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `adb_not_found` when the adb binary is missing; `adb_command_failed` when a `screencap` / `uiautomator` adb command fails. `query_malformed` when `annotateElements:true` without `screenshot` in kinds. A failed ui_dump yields `uiDumpPath:null` (not an error); annotate-side failure surfaces in `annotation.error`, not as a tool error.",
+  "Args: `runId`; `kinds` — a non-empty list of `screenshot` and/or `ui_dump`; optional `label`; optional `annotateElements` (default `false`); optional `filter` (`{clickableOnly?, classContains?, textContains?, contentDescContains?, inViewport?}`) and `limit` (1-500, default 100 on the annotate path) which take effect ONLY when `annotateElements:true` and narrow the elements that get badge-drawn + mapped (same semantics as `list_elements` filter — AND composition, case-insensitive substrings, half-open viewport intersect).",
+  'Returns: `{captureId, capturedAt, screenshotPath?, uiDumpPath?, uiSummary?, annotation?}`; `annotation` is present iff `annotateElements:true` and holds `{screenshotPath, elementCount, error, elements, unfilteredCount, filteredCount, truncated?, warnings?}`. `unfilteredCount` is the raw dump size; `filteredCount` is post-filter pre-truncate; `elementCount === elements.length` is post-truncate. `truncated:true` means `limit` cut at least one filter match (agent should tighten `filter` and re-call). `warnings:["viewport_unknown"]` surfaces when `inViewport:true` was requested but `wm size` could not be probed. On soft-degrade, `annotation.screenshotPath:null` + `annotation.error:<code>` (counts all 0); the raw `screenshotPath` is unaffected.',
+  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `adb_not_found` when the adb binary is missing; `adb_command_failed` when a `screencap` / `uiautomator` adb command fails. `query_malformed` when `annotateElements:true` without `screenshot` in kinds, OR when `filter` / `limit` is supplied without `annotateElements:true`, OR when `filter` / `limit` fails per-field validation. A failed ui_dump yields `uiDumpPath:null` (not an error); annotate-side failure surfaces in `annotation.error`, not as a tool error.",
 ].join("\n");
 
 /** Capture id: 12 hex chars — filename-safe and carries no caller-supplied data. */
@@ -188,27 +189,36 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
           { runId: input.runId },
         );
       }
-      // v2-F.3 reject gate: filter / limit are annotate-only inputs.
-      // `limit` has a zod `.default(100)` so it's always defined post-parse;
-      // we only count an explicit caller-supplied value as "set" by looking
-      // at the parsed limit being non-default OR by treating `filter` /
-      // `limit` distinct from default as caller intent. Cleanest:
-      // `filter !== undefined` is unambiguous; `limit !== 100` is treated as
-      // explicit. Per F3-Q7, BOTH (filter ∪ limit) without annotateElements
-      // → query_malformed.
-      const explicitLimit = input.limit !== 100;
-      if (!wantsAnnotate && (input.filter !== undefined || explicitLimit)) {
+      // v2-F.3 reject gate (Round 3 amendment): `filter` and `limit` are
+      // annotate-only inputs. `limit` uses `captureElementLimitSchema`
+      // (raw optional, no default), so `input.limit !== undefined`
+      // unambiguously means "caller supplied a value" — including the
+      // corner case `{limit:100}` that the v0.5.2 default-equality check
+      // missed. F3-Q7: `wantsAnnotate === false && (filter !== undefined
+      // || limit !== undefined) -> query_malformed`.
+      if (!wantsAnnotate && (input.filter !== undefined || input.limit !== undefined)) {
         throw new ToolDomainError(
           "query_malformed",
           "filter / limit on capture only take effect when annotateElements:true.",
           { runId: input.runId },
         );
       }
+      // On the annotate path, the 100 default is applied here (the schema
+      // no longer auto-defaults; see captureElementLimitSchema doc).
+      const effectiveLimit = input.limit ?? 100;
 
       const structured: CaptureStructured = { captureId, capturedAt };
       let uiDumpFailed = false;
       let annotateError: string | null = null;
       let annotatedElementCount = 0;
+      // v2-F.3 audit-field state, surfaces in events.jsonl + commands.jsonl
+      // for the annotate path. v0.5.2 audit blocker #2: the response carried
+      // these counts but the persisted rows did not, so post-run analysis
+      // could not reconstruct why an annotated capture returned fewer
+      // elements. Now both rows include them.
+      let auditUnfilteredCount = 0;
+      let auditFilteredCount = 0;
+      let auditTruncated = false;
 
       let screenshotBytes: Buffer | null = null;
       if (kinds.includes("screenshot")) {
@@ -287,11 +297,18 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
           const viewportProbeFailed = wantsViewport && viewport === null;
           const unfiltered = uiElements;
           const filtered = applyElementFilter(unfiltered, input.filter, viewport);
-          const trimmed = filtered.length > input.limit ? filtered.slice(0, input.limit) : filtered;
+          const trimmed =
+            filtered.length > effectiveLimit ? filtered.slice(0, effectiveLimit) : filtered;
           const annotateInputElements = trimmed;
           const truncatedAnnotation = filtered.length > trimmed.length;
           const annotationWarnings: string[] = [];
           if (viewportProbeFailed) annotationWarnings.push("viewport_unknown");
+          // Hand the counts out so appendCommand / appendEvent (below) can
+          // persist them; this is the v0.5.3 fold-in of v0.5.2 audit
+          // blocker #2.
+          auditUnfilteredCount = unfiltered.length;
+          auditFilteredCount = filtered.length;
+          auditTruncated = truncatedAnnotation;
 
           const annotatedPath = join(artifactsDir, `screenshot-${captureId}-annotated.png`);
           try {
@@ -340,11 +357,25 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
         structured.annotation = annotation;
       }
 
+      // v2-F.3 audit-row payload — only present on the annotate path, where
+      // filter/limit/counts are meaningful. Bundling here keeps appendCommand
+      // and appendEvent in sync.
+      const annotateAuditFields = wantsAnnotate
+        ? {
+            unfilteredElementCount: auditUnfilteredCount,
+            filteredElementCount: auditFilteredCount,
+            ...(input.filter !== undefined ? { filter: input.filter } : {}),
+            ...(input.limit !== undefined ? { limit: input.limit } : {}),
+            ...(auditTruncated ? { truncated: true as const } : {}),
+          }
+        : {};
+
       await session.appendCommand({
         tool: "capture",
         captureId,
         kinds,
         ...(wantsAnnotate ? { annotated: true } : {}),
+        ...annotateAuditFields,
       });
       await session.appendEvent({
         type: "capture",
@@ -359,6 +390,7 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
               ...(annotateError !== null ? { annotateError } : {}),
             }
           : {}),
+        ...annotateAuditFields,
       });
       return ok(structured);
     },

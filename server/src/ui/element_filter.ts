@@ -46,18 +46,36 @@ export const ElementFilterSchema = z
 export type ElementFilter = z.output<typeof ElementFilterSchema>;
 
 /**
- * `limit` zod fragment shared across the two tools' input schemas.
- *
- * Chain order matters: `z.number().default(100)` evaluates as
- * "number, with 100 as the substituted value when input is undefined."
- * Wrapping that in `.optional()` (i.e. `.default(100).optional()`) re-adds
- * an `undefined` arm AFTER the default, which means `parse(undefined)`
- * returns `undefined` — defeating the default. The runtime-correct shape
- * is bare `.default(100)`; the caller can still omit the field because
- * `z.input<...>` treats `.default(...)` as optional input but
- * `z.output<...>` types it as required-with-fallback.
+ * Numeric bounds shared by the two `limit` variants below. Kept private —
+ * callers compose with the bounds via the two exported wrappers; mixing
+ * `.default(...)` with `.optional()` would silently break the default.
  */
-export const elementLimitSchema = z.number().int().min(1).max(500).default(100);
+const elementLimitBounds = z.number().int().min(1).max(500);
+
+/**
+ * `limit` zod fragment for `list_elements`. Bare `.default(100)` — the
+ * caller can omit, in which case post-parse `input.limit` is the number
+ * `100`. v2-F.3 Round 2 codex STOP #1 fix: do NOT chain `.optional()`
+ * after `.default(...)`; that resolves omitted to `undefined`, defeating
+ * the default. Matches the v2-G evidence search `limit` shape.
+ */
+export const elementLimitSchema = elementLimitBounds.default(100);
+
+/**
+ * `limit` zod fragment for `capture({annotateElements:true})`. Bare
+ * `.optional()` — NO default at the schema layer. The handler applies the
+ * 100 default only when `annotateElements:true`, so the F3-Q7 strict
+ * reject can distinguish "caller passed limit:100 without annotate"
+ * (always reject, even though the value happens to equal the default)
+ * from "caller omitted limit" (no rejection).
+ *
+ * Round 3 amendment (post-cut audit blocker #3): the v0.5.2 cut used
+ * `elementLimitSchema` here too, but that meant `input.limit !== 100`
+ * was the only signal for "explicit limit," so `{limit:100}` without
+ * annotate slipped past F3-Q7's reject. This separate optional variant
+ * preserves caller intent at parse time.
+ */
+export const captureElementLimitSchema = elementLimitBounds.optional();
 
 /**
  * Apply the filter to `elements`. AND composition over present fields;

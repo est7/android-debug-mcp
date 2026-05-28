@@ -463,6 +463,27 @@ describe("capture annotateElements (v2-F.1)", () => {
     expect(err.error).toBe("query_malformed");
   });
 
+  it("v2-F.3 Round 3 regression: limit:100 (== default value) without annotateElements → query_malformed", async () => {
+    // v0.5.2 audit blocker #3: when capture's `limit` had `.default(100)`,
+    // the handler used `input.limit !== 100` as the explicit-limit check,
+    // so caller-supplied `{limit:100}` slipped past the reject gate. The
+    // v0.5.3 fix moves capture to a raw-optional schema; this regression
+    // pins the contract.
+    const h = await harness();
+    open.push(() => h.shutdown());
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        limit: 100, // same as the previous default; MUST still reject
+      },
+    });
+    expect(r.isError).toBe(true);
+    const err = JSON.parse(callText(r)) as { error: string };
+    expect(err.error).toBe("query_malformed");
+  });
+
   it("v2-F.3: omitting filter/limit on capture w/o annotateElements is still valid (v2-F.1 behavior unchanged)", async () => {
     const h = await harness();
     open.push(() => h.shutdown());
@@ -495,6 +516,73 @@ describe("capture annotateElements (v2-F.1)", () => {
     expect(sc.annotation.unfilteredCount).toBe(3);
     expect(sc.annotation.filteredCount).toBe(2);
     expect(sc.annotation.warnings).toBeUndefined();
+  });
+
+  it("v2-F.3 Round 3: capture commands.jsonl + events.jsonl rows carry annotate audit fields", async () => {
+    // v0.5.2 audit blocker #2: the response carried filter/limit/counts on
+    // the annotate path, but appendCommand + appendEvent did not persist
+    // them. v0.5.3 fix adds the locked audit fields to both rows; this test
+    // pins the persisted shape.
+    const h = await harness();
+    open.push(() => h.shutdown());
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        annotateElements: true,
+        filter: { clickableOnly: true },
+        limit: 2,
+      },
+    });
+    expect(r.isError).toBeFalsy();
+
+    const commands = readFileSync(join(h.runDir, "commands.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const captureCmd = commands.find((c) => c.tool === "capture");
+    expect(captureCmd).toBeDefined();
+    expect(captureCmd?.annotated).toBe(true);
+    expect(captureCmd?.unfilteredElementCount).toBe(3);
+    expect(captureCmd?.filteredElementCount).toBe(3);
+    expect(captureCmd?.limit).toBe(2);
+    expect(captureCmd?.truncated).toBe(true);
+    expect(captureCmd?.filter).toEqual({ clickableOnly: true });
+
+    const events = readFileSync(join(h.runDir, "events.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const captureEvt = events.find((e) => e.type === "capture" && e.annotated === true);
+    expect(captureEvt).toBeDefined();
+    expect(captureEvt?.unfilteredElementCount).toBe(3);
+    expect(captureEvt?.filteredElementCount).toBe(3);
+    expect(captureEvt?.limit).toBe(2);
+    expect(captureEvt?.truncated).toBe(true);
+    expect(captureEvt?.filter).toEqual({ clickableOnly: true });
+  });
+
+  it("v2-F.3 Round 3: capture audit fields absent on non-annotate path", async () => {
+    // Negative: a plain screenshot capture (no annotate) should NOT carry
+    // the v2-F.3 audit fields — they are annotate-specific.
+    const h = await harness();
+    open.push(() => h.shutdown());
+    await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: { runId: h.runId, kinds: ["screenshot"] },
+    });
+    const commands = readFileSync(join(h.runDir, "commands.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const captureCmd = commands.find((c) => c.tool === "capture");
+    expect(captureCmd?.annotated).toBeUndefined();
+    expect(captureCmd?.unfilteredElementCount).toBeUndefined();
+    expect(captureCmd?.filteredElementCount).toBeUndefined();
+    expect(captureCmd?.filter).toBeUndefined();
+    expect(captureCmd?.limit).toBeUndefined();
+    expect(captureCmd?.truncated).toBeUndefined();
   });
 
   it("v2-F.3: viewport_unknown surfaces in annotation.warnings when wm size probe fails", async () => {

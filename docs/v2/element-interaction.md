@@ -696,6 +696,37 @@ contract 漏洞:Phase 1 实施可能 drift(`list_elements` 与 capture 走不同
 fragment + 显式两 tool 同共享 + `0` 由 zod 强制 ≥1 + 两 tool 边界一致;
 F3-Q7 capture 的 `query_malformed` 形态扩到也包含 `limit without annotateElements:true`。
 
+**Round 3 amendment(post-cut audit 2026-05-28 #3,v0.5.3 修订):** 上述
+"两 tool 同共享 schema" 与 F3-Q7 strict reject 在 v0.5.2 实施时撞了:
+`elementLimitSchema = z.number().int().min(1).max(500).default(100)` 让 capture 的
+handler post-parse 拿不到 "caller 有无 supply" 信号(default 把 undefined 替换为 100),
+所以 handler 用 `input.limit !== 100` 当 explicit signal —— `{limit:100}`(=default)
+绕过 reject,违反 F3-Q7 "`limit !== undefined` → reject"。最终落点:
+**capture 用 raw-optional 变体 `captureElementLimitSchema = z.number().int().min(1).max(500).optional()`**
+(无 default,handler 在 annotate 路径自行应用 100 默认值);**list_elements 不动**(继续用
+`elementLimitSchema` 自带 default,因为 list_elements 没有"未 supply"特殊语义)。**共享
+的是 bounds**(`elementLimitBounds = z.number().int().min(1).max(500)`,两变体都从此 wrap),
+**不共享** default 应用。Capture regression test pin `{limit:100}` without `annotateElements`
+→ `query_malformed`。
+
+**Round 3 amendment(post-cut audit 2026-05-28 #1+#2,v0.5.3 修订):** v0.5.2 实施时
+两条 contract drift codex 抓:
+  - **#1 capture tool description 没同步 v2-F.3**:Args / Returns / Errors 仍是
+    v0.5.0 ship 文字,不提 `filter` / `limit` / `annotation.{unfilteredCount,
+    filteredCount, truncated?, warnings?}` / `query_malformed when filter/limit
+    without annotateElements`。Description 是 agent-facing 契约面(inputSchema
+    `.passthrough()` 不暴露 source-specific shape 给 LLM),必须与 schema 同步。
+    Fix:capture description 与 list_elements description 对齐,显式列五字段 filter
+    + limit 边界 + annotation 块字段 + 所有 query_malformed 触发条件。
+  - **#2 capture event/commands audit 字段没落 disk**:F3-Q8 lock 显式说
+    capture 的 events.jsonl + commands.jsonl 行也加 `unfilteredElementCount /
+    filteredElementCount / filter? / limit? / truncated?`,但 v0.5.2 handler
+    `appendCommand` + `appendEvent` 只写了 `{tool, captureId, kinds, annotated}`,
+    audit consumer 拿不到 filter/limit/counts 反推"为啥这次 annotate 少返"。
+    Fix:handler 在 annotate 分支末把 unfilteredCount / filteredCount / truncated
+    缓存到 outer scope,`appendCommand` + `appendEvent` 走同一 `annotateAuditFields`
+    spread,只在 `wantsAnnotate === true` 时写;非 annotate path 不污染审计行。
+
 #### F3-Q6:filter 与 v2-F.2 (c) `annotateElementIds?` 的关系?
 
 **Decision:不同轴,可共存,本 sprint 只做 filter(server-side 截短),
