@@ -145,6 +145,10 @@ export function registerSearchEvidence(server: McpServer, manager: SessionManage
           pulledFiles: [],
           softEmpty: true,
           warning: dispatched.warning,
+          fullRecords,
+          truncatedRecords: 0,
+          truncatedFullBytesSum: 0,
+          savedBytesSum: 0,
         });
         return ok({
           records: [],
@@ -165,10 +169,18 @@ export function registerSearchEvidence(server: McpServer, manager: SessionManage
         fullRecords,
       });
 
-      await emitPullEventsAndCommand(session, "search_evidence", dispatched.source.id, result);
+      const responseRecords = result.records.map((r) => r as Record<string, unknown>);
+      const previewAudit = computePreviewAudit(responseRecords, fullRecords);
+      await emitPullEventsAndCommand(
+        session,
+        "search_evidence",
+        dispatched.source.id,
+        result,
+        previewAudit,
+      );
 
       return ok({
-        records: result.records.map((r) => r as Record<string, unknown>),
+        records: responseRecords,
         ...(result.nextCursor !== null ? { nextCursor: result.nextCursor } : {}),
         statsRun: toMutableStats(result.statsRun),
       });
@@ -179,12 +191,64 @@ export function registerSearchEvidence(server: McpServer, manager: SessionManage
 export { toMutableStats };
 
 /**
+ * v2-G.1 Phase 4 — preview audit aggregates for the commands.jsonl row.
+ *
+ * Computed per page from `result.records`. When the source declared a
+ * preview hook AND the caller did not opt into `fullRecords:true`, every
+ * record carries `_meta.preview = {truncated, fullSizeBytes, truncatedFields}`;
+ * we count the truncated ones and sum the byte ledger.
+ *
+ *   - `truncatedRecords` — how many records on this page were lossy.
+ *   - `truncatedFullBytesSum` — `Σ fullSizeBytes` over the truncated set.
+ *     "How many bytes the agent would have eaten under `fullRecords:true`."
+ *   - `savedBytesSum` — `Σ (fullSizeBytes - byteLen(JSON.stringify(previewed)))`
+ *     over the truncated set. "How many bytes preview actually saved."
+ *
+ * Compression ratio (per lock § Q10) = `savedBytesSum / truncatedFullBytesSum`.
+ *
+ * For records that are NOT truncated (hook returned `truncated:false`), the
+ * preview hook still ran but no bytes were saved — those are excluded from
+ * the sums but visible as `total records - truncatedRecords`.
+ */
+interface PreviewAudit {
+  readonly fullRecords: boolean;
+  readonly truncatedRecords: number;
+  readonly truncatedFullBytesSum: number;
+  readonly savedBytesSum: number;
+}
+
+export function computePreviewAudit(
+  records: readonly Record<string, unknown>[],
+  fullRecords: boolean,
+): PreviewAudit {
+  // When `fullRecords:true`, runtime skipped the preview projection, so no
+  // record carries `_meta.preview` — all sums stay 0 by construction.
+  // Similarly when the source has no `previewForAgent?` (no-hook fallback)
+  // the helper exits early and `_meta` is absent.
+  let truncatedRecords = 0;
+  let truncatedFullBytesSum = 0;
+  let savedBytesSum = 0;
+  for (const rec of records) {
+    const meta = (rec as { _meta?: { preview?: { truncated: boolean; fullSizeBytes: number } } })
+      ._meta?.preview;
+    if (meta?.truncated !== true) continue;
+    truncatedRecords++;
+    truncatedFullBytesSum += meta.fullSizeBytes;
+    const previewedBytes = Buffer.byteLength(JSON.stringify(rec), "utf8");
+    savedBytesSum += meta.fullSizeBytes - previewedBytes;
+  }
+  return { fullRecords, truncatedRecords, truncatedFullBytesSum, savedBytesSum };
+}
+
+/**
  * Q9 audit emission shared by `search_evidence` and `extract_evidence_context`:
  *
  *   - `evidence_pulled` event is appended ONLY when a real pull happened. Cache
  *     hits leave events.jsonl untouched (Q9: "*真实拉* 发生时写").
  *   - `commands.jsonl` always gets one aggregate row keyed by `tool`, mirroring
  *     the capture-mirror format (Q9: "走 aggregate ... capture-mirror 体例").
+ *     Phase 4 adds the 4 preview-audit fields (`fullRecords` plus the byte
+ *     ledger) so post-run review can reconstruct compression savings.
  *
  * Exported so the sibling extract_evidence_context handler shares the same
  * audit shape — keeping the two tools structurally identical for the
@@ -195,6 +259,7 @@ export async function emitPullEventsAndCommand(
   tool: "search_evidence" | "extract_evidence_context",
   sourceId: string,
   result: { readonly pulls: readonly PullSummary[]; readonly statsRun: RunStats },
+  previewAudit: PreviewAudit,
 ): Promise<void> {
   if (result.pulls.length > 0) {
     await session.appendEvent({
@@ -213,5 +278,9 @@ export async function emitPullEventsAndCommand(
     statsRun: result.statsRun,
     pullsTriggered: result.statsRun.pullsTriggered,
     pulledFiles: result.statsRun.pulledFiles.map((p) => basename(p)),
+    fullRecords: previewAudit.fullRecords,
+    truncatedRecords: previewAudit.truncatedRecords,
+    truncatedFullBytesSum: previewAudit.truncatedFullBytesSum,
+    savedBytesSum: previewAudit.savedBytesSum,
   });
 }

@@ -677,6 +677,124 @@ describe("v2-G.1 Phase 3 — fullRecords + reject path", () => {
     expect(callText(out)).toMatch(/fullRecords:true requires limit <= 10/);
   });
 
+  it("commands.jsonl audit row carries Phase 4 preview-audit fields (preview path)", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    writeProfileJson(h.projectRoot, PREVIEW_PROFILE_NAME);
+    await h.client.callTool({ name: "android_debug_stop_session", arguments: { runId } });
+    const r2 = await h.client.callTool({
+      name: "android_debug_start_session",
+      arguments: { packageName: "com.example.v2g_evidence", projectRoot: h.projectRoot },
+    });
+    const sc2 = structured(r2);
+    const newRunId = sc2.runId as string;
+    const runDir = sc2.runDir as string;
+
+    await h.client.callTool({
+      name: "android_debug_search_evidence",
+      arguments: { runId: newRunId, query: { source: "fake_src", pathPrefix: "/api" } },
+    });
+
+    const commandsText = readFileSync(join(runDir, "commands.jsonl"), "utf8");
+    const searchRow = commandsText
+      .split("\n")
+      .filter((l) => l.includes('"tool":"search_evidence"'))
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .pop();
+    expect(searchRow).toBeDefined();
+    expect(searchRow?.fullRecords).toBe(false);
+    expect(searchRow?.truncatedRecords).toBeGreaterThan(0);
+    expect(searchRow?.truncatedFullBytesSum).toBe((searchRow?.truncatedRecords as number) * 9999);
+    // savedBytesSum = fullSizeBytes - byteLen(previewedRecord). previewed
+    // record is {source, tsMs, path:"[preview]", _meta:{preview:{...}}}; for
+    // every truncated record (~110 bytes) saved ≈ 9999 - byteLen(rec).
+    expect(searchRow?.savedBytesSum).toBeGreaterThan(0);
+    expect(searchRow?.savedBytesSum).toBeLessThan(searchRow?.truncatedFullBytesSum as number);
+  });
+
+  it("commands.jsonl audit row: fullRecords:true → sums all 0", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    writeProfileJson(h.projectRoot, PREVIEW_PROFILE_NAME);
+    await h.client.callTool({ name: "android_debug_stop_session", arguments: { runId } });
+    const r2 = await h.client.callTool({
+      name: "android_debug_start_session",
+      arguments: { packageName: "com.example.v2g_evidence", projectRoot: h.projectRoot },
+    });
+    const sc2 = structured(r2);
+    const newRunId = sc2.runId as string;
+    const runDir = sc2.runDir as string;
+
+    await h.client.callTool({
+      name: "android_debug_search_evidence",
+      arguments: {
+        runId: newRunId,
+        query: { source: "fake_src", pathPrefix: "/api" },
+        limit: 5,
+        fullRecords: true,
+      },
+    });
+
+    const commandsText = readFileSync(join(runDir, "commands.jsonl"), "utf8");
+    const searchRow = commandsText
+      .split("\n")
+      .filter((l) => l.includes('"tool":"search_evidence"'))
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .pop();
+    expect(searchRow?.fullRecords).toBe(true);
+    expect(searchRow?.truncatedRecords).toBe(0);
+    expect(searchRow?.truncatedFullBytesSum).toBe(0);
+    expect(searchRow?.savedBytesSum).toBe(0);
+  });
+
+  it("commands.jsonl audit row: vanilla soft-empty still includes Phase 4 fields", async () => {
+    const h = await harness();
+    const { runId, runDir } = await startRun(h); // no profile → soft-empty
+    await h.client.callTool({
+      name: "android_debug_search_evidence",
+      arguments: { runId, query: { source: "fake_src" } },
+    });
+    const commandsText = readFileSync(join(runDir, "commands.jsonl"), "utf8");
+    const row = commandsText
+      .split("\n")
+      .filter((l) => l.includes('"tool":"search_evidence"'))
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .pop();
+    expect(row?.softEmpty).toBe(true);
+    expect(row?.fullRecords).toBe(false);
+    expect(row?.truncatedRecords).toBe(0);
+    expect(row?.truncatedFullBytesSum).toBe(0);
+    expect(row?.savedBytesSum).toBe(0);
+  });
+
+  it("commands.jsonl audit row: query_malformed reject path does NOT write a row", async () => {
+    const h = await harness();
+    const { runId, runDir } = await startRun(h);
+    await h.client.callTool({
+      name: "android_debug_search_evidence",
+      arguments: {
+        runId,
+        query: { source: "fake_src", pathPrefix: "/api" },
+        limit: 11,
+        fullRecords: true,
+      },
+    });
+    // commands.jsonl may or may not exist depending on whether anything else
+    // wrote to it. The point: no search_evidence row from THIS call.
+    const exists = (() => {
+      try {
+        readFileSync(join(runDir, "commands.jsonl"), "utf8");
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    if (exists) {
+      const text = readFileSync(join(runDir, "commands.jsonl"), "utf8");
+      expect(text.includes('"tool":"search_evidence"')).toBe(false);
+    }
+  });
+
   it("extract_evidence_context default: records carry _meta.preview", async () => {
     const h = await harness();
     const { runId } = await startRun(h);

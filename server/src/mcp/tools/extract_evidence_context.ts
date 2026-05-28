@@ -7,7 +7,11 @@ import type { SessionManager } from "../../session/manager.ts";
 import { registerDebugTool } from "../register.ts";
 import { ToolDomainError } from "../toolError.ts";
 import { ok, requireConnectedSession, runIdInput, touch } from "./_shared.ts";
-import { emitPullEventsAndCommand, toMutableStats } from "./search_evidence.ts";
+import {
+  computePreviewAudit,
+  emitPullEventsAndCommand,
+  toMutableStats,
+} from "./search_evidence.ts";
 
 /**
  * v2-G `extract_evidence_context` (Q7 + Q8 + Q11).
@@ -178,6 +182,10 @@ export function registerExtractEvidenceContext(server: McpServer, manager: Sessi
           softEmpty: true,
           warning: dispatched.warning,
           tsMsRange,
+          fullRecords,
+          truncatedRecords: 0,
+          truncatedFullBytesSum: 0,
+          savedBytesSum: 0,
         });
         return ok({
           records: [],
@@ -199,15 +207,18 @@ export function registerExtractEvidenceContext(server: McpServer, manager: Sessi
         fullRecords,
       });
 
+      const responseRecords = result.records.map((r) => r as Record<string, unknown>);
+      const previewAudit = computePreviewAudit(responseRecords, fullRecords);
       await emitPullEventsAndCommand(
         session,
         "extract_evidence_context",
         dispatched.source.id,
         result,
+        previewAudit,
       );
 
       return ok({
-        records: result.records.map((r) => r as Record<string, unknown>),
+        records: responseRecords,
         ...(result.nextCursor !== null ? { nextCursor: result.nextCursor } : {}),
         statsRun: toMutableStats(result.statsRun),
         tsMsRange,
