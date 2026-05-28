@@ -241,10 +241,13 @@ export function drawChar(
 
 /**
  * v2-F.2 — render a string of ASCII glyphs at (x, y), `scale` px per native
- * bit, gap `GLYPH_GAP * scale` between consecutive chars. Mirrors
- * {@link drawNumber} for the digit renderer. Cursor advances by
- * `5 * scale + GLYPH_GAP` per char regardless of whether the char is in the
- * atlas, so spacing stays uniform when a class name has an unknown char.
+ * bit, gap **unscaled** `GLYPH_GAP` px between consecutive chars (v0.5.5
+ * audit advisory #1 — comment said `GLYPH_GAP * scale` but impl is
+ * unscaled, and `measureText` + the 94 px "EditText" lock both depend on
+ * the unscaled value). Mirrors {@link drawNumber} for the digit renderer.
+ * Cursor advances by `5 * scale + GLYPH_GAP` per char regardless of
+ * whether the char is in the atlas, so spacing stays uniform when a
+ * class name has an unknown char.
  */
 export function drawText(
   img: ImageBuffer,

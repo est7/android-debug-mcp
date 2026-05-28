@@ -159,7 +159,7 @@ function mintCaptureId(): string {
   return randomBytes(6).toString("hex");
 }
 
-function emptyAnnotation(error: string, callerProvidedSubset: boolean): AnnotationStructured {
+function emptyAnnotation(error: string, subsetRequested?: number): AnnotationStructured {
   return {
     screenshotPath: null,
     elementCount: 0,
@@ -167,11 +167,16 @@ function emptyAnnotation(error: string, callerProvidedSubset: boolean): Annotati
     elements: [],
     unfilteredCount: 0,
     filteredCount: 0,
-    // v2-F.2: pair subsetRequested/subsetApplied. When caller supplied
-    // annotationIds but the path soft-degraded BEFORE we could compute the
-    // subset, surface `subsetRequested = input.annotationIds.length` and
-    // `subsetApplied = 0`. When caller didn't supply, both omitted.
-    ...(callerProvidedSubset ? { subsetRequested: 0, subsetApplied: 0 } : {}),
+    // v2-F.2: pair subsetRequested/subsetApplied. v0.5.4 audit blocker #1
+    // — when caller supplied annotationIds but the path soft-degraded, the
+    // helper used to receive only a boolean and emit `subsetRequested:0`,
+    // which contradicted the public contract ("subsetRequested = caller-
+    // array length pre-dedup"). v0.5.5 fix: caller passes the actual
+    // requested count, so soft-degrade rows truthfully report e.g.
+    // `{subsetRequested:3, subsetApplied:0}` for `annotationIds:[2,5,7]`.
+    // When caller didn't supply (subsetRequested === undefined), both
+    // fields stay omitted (paired-absent invariant).
+    ...(subsetRequested !== undefined ? { subsetRequested, subsetApplied: 0 } : {}),
   };
 }
 
@@ -284,7 +289,9 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
       let auditTruncated = false;
       // v2-F.2 subset audit. Only emitted to audit row when caller supplied
       // `annotationIds`; surfaced in annotation.subsetRequested/subsetApplied.
-      const callerProvidedSubset = input.annotationIds !== undefined;
+      // v0.5.5 (audit blocker #1): soft-degrade `emptyAnnotation` now takes
+      // the actual requested count (or undefined) so it never lies with
+      // `subsetRequested:0` on a caller-supplied subset.
       let auditSubsetApplied: number | null = null;
 
       let screenshotBytes: Buffer | null = null;
@@ -349,9 +356,11 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
       if (wantsAnnotate) {
         let annotation: AnnotationStructured;
         if (uiElements === null) {
-          // collect failed earlier → soft-degrade annotate.
+          // collect failed earlier → soft-degrade annotate. v0.5.5: pass
+          // `input.annotationIds.length` so subsetRequested reflects the
+          // caller's intent even though we couldn't compute the subset.
           annotateError = "annotate_elements_unavailable";
-          annotation = emptyAnnotation(annotateError, callerProvidedSubset);
+          annotation = emptyAnnotation(annotateError, input.annotationIds?.length);
         } else if (screenshotBytes === null) {
           // We enforced kinds.includes("screenshot") above; this is a handler bug.
           throw new Error("capture annotate path reached without screenshot bytes.");
@@ -451,7 +460,14 @@ export function registerCapture(server: McpServer, manager: SessionManager): voi
             // catch-all undocumented `annotate_unknown_failure` code.
             if (err instanceof AnnotateError) {
               annotateError = err.code;
-              annotation = emptyAnnotation(err.code, callerProvidedSubset);
+              // v0.5.5: at this point we may have already computed
+              // subsetRequested in the try-block (if applyAnnotationIdsSubset
+              // succeeded but annotate-side then failed); fall back to the
+              // raw input length when the try-block aborted before computing.
+              annotation = emptyAnnotation(
+                err.code,
+                subsetRequested ?? input.annotationIds?.length,
+              );
             } else {
               throw err;
             }

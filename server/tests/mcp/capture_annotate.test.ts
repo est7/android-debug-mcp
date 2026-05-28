@@ -676,6 +676,43 @@ describe("capture annotateElements (v2-F.1)", () => {
     expect(err.error).toBe("query_malformed");
   });
 
+  it("v2-F.2 v0.5.5 regression: annotationIds + ui_dump failure → subsetRequested reflects caller intent (not 0)", async () => {
+    // v0.5.4 audit blocker #1: when collectCurrentElements fails AFTER the
+    // caller supplied annotationIds, the soft-degrade `emptyAnnotation`
+    // emitted `subsetRequested:0` (lying about caller intent). v0.5.5 fix:
+    // helper takes the actual count + emits truthful pair.
+    adbState.uiDumpResult = { ok: false, xml: null, detail: "mock-failed" };
+    const h = await harness();
+    open.push(() => h.shutdown());
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        annotateElements: true,
+        annotationIds: [1, 2, 3],
+      },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r) as {
+      annotation: {
+        screenshotPath: string | null;
+        error: string | null;
+        elementCount: number;
+        elements: unknown[];
+        subsetRequested?: number;
+        subsetApplied?: number;
+      };
+    };
+    expect(sc.annotation.error).toBe("annotate_elements_unavailable");
+    expect(sc.annotation.screenshotPath).toBeNull();
+    expect(sc.annotation.elementCount).toBe(0);
+    expect(sc.annotation.elements).toEqual([]);
+    // The fix: subsetRequested reflects the caller-supplied length, NOT 0.
+    expect(sc.annotation.subsetRequested).toBe(3);
+    expect(sc.annotation.subsetApplied).toBe(0);
+  });
+
   it("v2-F.2: subsetRequested / subsetApplied absent when annotationIds omitted", async () => {
     const h = await harness();
     open.push(() => h.shutdown());
