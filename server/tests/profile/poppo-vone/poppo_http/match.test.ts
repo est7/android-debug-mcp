@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   type PoppoHttpQuery,
+  PoppoHttpQuerySchema,
   derivePoppoHttpOutcome,
   matchPoppoHttpRecord,
 } from "../../../../src/profile/poppo-vone/poppo_http/match.ts";
@@ -270,5 +271,71 @@ describe("matchPoppoHttpRecord — composed AND semantics", () => {
     const q: PoppoHttpQuery = { source: "poppo_http" };
     expect(matchPoppoHttpRecord(rec(), q)).toBe(true);
     expect(matchPoppoHttpRecord(rec({ heartBeat: true }), q)).toBe(true);
+  });
+});
+
+describe("PoppoHttpQuerySchema — tsMsRange tightening (v2-G.1 Block A)", () => {
+  // v2-G.1 Block A: tsMsRange MUST be {from,to} with `to >= from` and window
+  // `to - from <= 24h`. Partial / inverted / oversized ranges are
+  // `query_malformed` at schema parse time. These tests pin the schema-level
+  // negative cases the public contract relies on.
+
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+  it("rejects from-only (no `to`)", () => {
+    expect(
+      PoppoHttpQuerySchema.safeParse({ source: "poppo_http", tsMsRange: { from: 0 } }).success,
+    ).toBe(false);
+  });
+
+  it("rejects to-only (no `from`)", () => {
+    expect(
+      PoppoHttpQuerySchema.safeParse({ source: "poppo_http", tsMsRange: { to: 1000 } }).success,
+    ).toBe(false);
+  });
+
+  it("rejects inverted range (to < from)", () => {
+    expect(
+      PoppoHttpQuerySchema.safeParse({
+        source: "poppo_http",
+        tsMsRange: { from: 1000, to: 500 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts exact 24h window (boundary inclusive)", () => {
+    expect(
+      PoppoHttpQuerySchema.safeParse({
+        source: "poppo_http",
+        tsMsRange: { from: 0, to: ONE_DAY_MS },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects 24h + 1ms window (boundary exclusive on the over side)", () => {
+    expect(
+      PoppoHttpQuerySchema.safeParse({
+        source: "poppo_http",
+        tsMsRange: { from: 0, to: ONE_DAY_MS + 1 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts equal from/to (zero-width window — single ms)", () => {
+    expect(
+      PoppoHttpQuerySchema.safeParse({
+        source: "poppo_http",
+        tsMsRange: { from: 1_716_600_000_000, to: 1_716_600_000_000 },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects unknown nested keys (strict on tsMsRange object)", () => {
+    expect(
+      PoppoHttpQuerySchema.safeParse({
+        source: "poppo_http",
+        tsMsRange: { from: 0, to: 1000, extra: 42 },
+      }).success,
+    ).toBe(false);
   });
 });

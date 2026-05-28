@@ -195,8 +195,9 @@ scenario #10)。同一轮 amendment 调整开放问题 #1 答案为 nodded with 
 
 若 body.decoded 不为 null:
     serialized = JSON.stringify(body.decoded)
-    若 serialized.length > THRESHOLD_BODY_DECODED_BYTES (2048):
-        body.decoded ← { __truncated: true, headChars: serialized.slice(0, 1024), fullBytes: serialized.length }
+    fullBytes = Buffer.byteLength(serialized, 'utf8')         // utf8 bytes, NOT char count
+    若 fullBytes > THRESHOLD_BODY_DECODED_BYTES (2048):
+        body.decoded ← { __truncated: true, headChars: serialized.slice(0, 1024), fullBytes }
         truncatedFields += "<which>.body.decoded"
 
 (`request.body` 与 `response.body` 同样规则各跑一次;`response.body` 不存在时
@@ -622,6 +623,40 @@ server/tests/
    **Nodded with hardcode** in `poppo_http/match.ts`。
 
 ## Amendments(codex grill 与 audit 期间 fold-in)
+
+### Phase 2 audit — 2026-05-28 — codex STOP(`tsMsRange` 公契约同步)
+
+Codex Phase 2 audit 抓到 1 条 blocking + 2 条 advisory。Blocking 是 public
+contract surface 同步,advisory 是测试覆盖 + lock prose 字面对齐。全部 fold-in
+进 Phase 2 fix commit。
+
+**Blocking issue(fold-in):**
+
+1. **`search_evidence` tool description 未同步 `tsMsRange` 新形状** ——
+   tool inputSchema 用 `.passthrough()` 不暴露 source-specific shape,所以
+   description 就是 agent-facing 的契约面。Phase 2 把 `tsMsRange` 收紧到
+   `{from,to}` 双 required + 24h cap 后,description 仍只列 `tsMsRange` 字段名,
+   没具化形状 —— agent 照旧打 `{from:0}` 会被 `query_malformed` 打回,只能
+   trial-and-error 学契约。Fold-in:`search_evidence` description 加一行
+   "Source-specific shapes: for `poppo_http`, `tsMsRange` MUST be
+   `{from:number,to:number}` — both bounds required, `to >= from`, window
+   `to - from <= 24h` (86400000 ms). Partial ranges (e.g. `{from:0}`) are
+   rejected as `query_malformed`."`extract_evidence_context` 描述加短句:
+   注入 bounded `{from,to}` 远小于 cap。
+
+**Advisory(全 fold-in):**
+
+- **`PoppoHttpQuerySchema.tsMsRange` 负向覆盖单测** —— codex 临场 ad-hoc 验过
+  from-only / to-only / inverted / exact 24h / 24h+1ms 全部正确,但缺 pinned
+  regression。Fold-in:`match.test.ts` 末新增 `PoppoHttpQuerySchema — tsMsRange
+  tightening` describe 段,7 个负向 / 边界单测。
+- **§ Q4 pseudocode 用 `serialized.length` 与 impl 字节计算不一致** ——
+  impl 用 `Buffer.byteLength(serialized, 'utf8')`(see `preview.ts`
+  `truncateDecoded`),与 schema `textBytes` / `previewBytes` vocabulary 一致;
+  lock pseudocode 字面写 `serialized.length`(JS string length = unicode code-point
+  count,与 bytes 在中文 / multi-byte 字符上差 3 倍)。Fold-in:§ Q4 pseudocode
+  改 `fullBytes = Buffer.byteLength(serialized, 'utf8')` + 注释 "utf8 bytes,
+  NOT char count"。
 
 ### Phase 1 audit — 2026-05-28 — codex STOP(`_meta` 反射也覆盖 hook output)
 

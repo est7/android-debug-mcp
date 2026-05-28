@@ -92,7 +92,7 @@ const description = [
   "Extract evidence records around a marker timestamp recorded in a debug run's `events.jsonl`.",
   "",
   "Use when: the agent has an interesting event (mark, crash, evidence_pulled) and wants the source's records inside the window around it.",
-  "Args: `runId`; `markerIsoTs` (the `ts` field copied verbatim from a prior event); `beforeMs` / `afterMs` (0-60000, default 5000); `query` (must carry `source: <sourceId>` — same shape as `search_evidence.query`, minus any `tsMsRange` field — this tool injects `tsMsRange` from the marker); `limit` (1-500, default 100); `cursor` (opaque pagination).",
+  "Args: `runId`; `markerIsoTs` (the `ts` field copied verbatim from a prior event); `beforeMs` / `afterMs` (0-60000, default 5000); `query` (must carry `source: <sourceId>` — same shape as `search_evidence.query`, minus any `tsMsRange` field — this tool injects a bounded `tsMsRange:{from,to}` from the marker, well within the 24h cap that `poppo_http` enforces on agent-supplied ranges); `limit` (1-500, default 100); `cursor` (opaque pagination).",
   "Returns: `{records[], warnings?, nextCursor?, statsRun, tsMsRange}`. `tsMsRange` echoes the resolved `{from, to}` window so the agent can verify the math.",
   "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session went degraded; `invalid_argument` when `query.tsMsRange` is set (this tool owns that field); `query_malformed` when the source-specific fields fail per-source strict validation; `invalid_cursor` for a tampered cursor.",
 ].join("\n");

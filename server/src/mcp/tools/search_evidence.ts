@@ -61,6 +61,7 @@ const description = [
   "",
   "Use when: the agent wants records from an evidence source declared by the active session's profile (e.g. HTTP logs from `poppo_http`).",
   "Args: `runId`; `query` (must carry `source: <sourceId>` PLUS at least one source-specific positive filter — e.g. for `poppo_http`: pathPrefix / methodIn / outcome / tsMsRange / hostContains / durationMsGte / errorTypeIn. `excludeHeartbeat` alone does NOT narrow; if you want records around a marker, use `extract_evidence_context` instead — it auto-injects `tsMsRange`); `limit` (1-500, default 100); `cursor` (opaque, from a prior `nextCursor` — pass the same `query` across pages).",
+  "Source-specific shapes: for `poppo_http`, `tsMsRange` MUST be `{from:number,to:number}` — both bounds required, `to >= from`, window `to - from <= 24h` (86400000 ms). Partial ranges (e.g. `{from:0}`) are rejected as `query_malformed`. Use `extract_evidence_context` for narrow marker-anchored windows.",
   "Returns: `{records[], warnings?, nextCursor?, statsRun}`. `warnings` lists soft-empty reasons (no profile loaded, source has no provider). `statsRun` reports `{filesScanned, recordsScanned, pullsTriggered, pulledFiles}` for audit / agent metrics.",
   "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session went degraded; `query_malformed` when the source-specific fields fail per-source strict validation; `query_underspecified` when the source requires at least one narrowing filter and none is supplied; `invalid_cursor` for a tampered or stale cursor.",
 ].join("\n");
