@@ -105,44 +105,47 @@ function sortKey(record: ParsedRecord): readonly (string | number)[] {
   return fn(record);
 }
 
-describe("poppoHttpSource — bindSession (codex Phase 4 audit R1)", () => {
-  it("injects sessionStartMs floor when agent did not provide tsMsRange.from", () => {
+describe("poppoHttpSource — bindSession (Phase 4 R1 + v2-G.1 Round 1 amendment)", () => {
+  // v2-G.1 Round 1 amendment: bindSession only clamps when tsMsRange is
+  // already present — it must NOT synthesize a partial range. The schema
+  // also requires `{from,to}` both bounded with a 24h window cap.
+  it("no synthesis: query without tsMsRange passes through unchanged", () => {
     const bound = bindSession({ source: "poppo_http" } as EvidenceQuery, CTX_TYPICAL);
-    const tsMsRange = (bound as { tsMsRange?: { from?: number; to?: number } }).tsMsRange;
-    expect(tsMsRange?.from).toBe(CTX_TYPICAL.sessionStartMs);
+    const tsMsRange = (bound as { tsMsRange?: { from: number; to: number } }).tsMsRange;
+    expect(tsMsRange).toBeUndefined();
   });
 
-  it("raises agent's tsMsRange.from to session floor when lower", () => {
-    const userFrom = CTX_TYPICAL.sessionStartMs - 86_400_000; // a day before session
+  it("no synthesis: pathPrefix-only query passes through unchanged", () => {
     const bound = bindSession(
-      { source: "poppo_http", tsMsRange: { from: userFrom } } as EvidenceQuery,
+      { source: "poppo_http", pathPrefix: "/api/v1/users" } as EvidenceQuery,
       CTX_TYPICAL,
     );
-    const tsMsRange = (bound as { tsMsRange?: { from?: number; to?: number } }).tsMsRange;
-    expect(tsMsRange?.from).toBe(CTX_TYPICAL.sessionStartMs);
+    expect((bound as { tsMsRange?: unknown }).tsMsRange).toBeUndefined();
+    expect((bound as unknown as { pathPrefix: string }).pathPrefix).toBe("/api/v1/users");
+  });
+
+  it("raises agent's tsMsRange.from to session floor when lower (keeps `to` intact)", () => {
+    const userFrom = CTX_TYPICAL.sessionStartMs - 60_000;
+    const userTo = CTX_TYPICAL.sessionStartMs + 60_000;
+    const bound = bindSession(
+      { source: "poppo_http", tsMsRange: { from: userFrom, to: userTo } } as EvidenceQuery,
+      CTX_TYPICAL,
+    );
+    const tsMsRange = (bound as unknown as { tsMsRange: { from: number; to: number } }).tsMsRange;
+    expect(tsMsRange.from).toBe(CTX_TYPICAL.sessionStartMs);
+    expect(tsMsRange.to).toBe(userTo);
   });
 
   it("preserves agent's tsMsRange.from when already at or above floor", () => {
     const userFrom = CTX_TYPICAL.sessionStartMs + 10_000;
+    const userTo = CTX_TYPICAL.sessionStartMs + 60_000;
     const bound = bindSession(
-      { source: "poppo_http", tsMsRange: { from: userFrom } } as EvidenceQuery,
+      { source: "poppo_http", tsMsRange: { from: userFrom, to: userTo } } as EvidenceQuery,
       CTX_TYPICAL,
     );
-    const tsMsRange = (bound as { tsMsRange?: { from?: number; to?: number } }).tsMsRange;
-    expect(tsMsRange?.from).toBe(userFrom);
-  });
-
-  it("preserves agent's tsMsRange.to (only `from` is clamped)", () => {
-    const bound = bindSession(
-      {
-        source: "poppo_http",
-        tsMsRange: { to: CTX_TYPICAL.sessionStartMs + 60_000 },
-      } as EvidenceQuery,
-      CTX_TYPICAL,
-    );
-    const tsMsRange = (bound as { tsMsRange?: { from?: number; to?: number } }).tsMsRange;
-    expect(tsMsRange?.to).toBe(CTX_TYPICAL.sessionStartMs + 60_000);
-    expect(tsMsRange?.from).toBe(CTX_TYPICAL.sessionStartMs);
+    const tsMsRange = (bound as unknown as { tsMsRange: { from: number; to: number } }).tsMsRange;
+    expect(tsMsRange.from).toBe(userFrom);
+    expect(tsMsRange.to).toBe(userTo);
   });
 });
 
@@ -214,7 +217,7 @@ describe("poppoHttpSource — validateNarrowingFilter (v0.4.0 Block A)", () => {
     ["pathPrefix", { source: "poppo_http", pathPrefix: "/api" }],
     ["methodIn", { source: "poppo_http", methodIn: ["GET"] }],
     ["outcome", { source: "poppo_http", outcome: "http_error" }],
-    ["tsMsRange", { source: "poppo_http", tsMsRange: { from: 0 } }],
+    ["tsMsRange", { source: "poppo_http", tsMsRange: { from: 0, to: 60_000 } }],
     ["hostContains", { source: "poppo_http", hostContains: "api.v.show" }],
     ["durationMsGte", { source: "poppo_http", durationMsGte: 1000 }],
     ["errorTypeIn", { source: "poppo_http", errorTypeIn: ["java.io.IOException"] }],

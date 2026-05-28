@@ -8,6 +8,7 @@ import type {
   ParsedRecord,
 } from "../../types.ts";
 import { type PoppoHttpQuery, PoppoHttpQuerySchema, matchPoppoHttpRecord } from "./match.ts";
+import { previewPoppoHttpRecord } from "./preview.ts";
 import { type PoppoHttpRecord, parsePoppoHttpLine } from "./record.ts";
 import { redactPoppoHttpRecord } from "./redact.ts";
 
@@ -213,19 +214,48 @@ export const poppoHttpSource: EvidenceSource = {
   },
 
   /**
-   * R1 — clamp `tsMsRange.from` to at least `ctx.sessionStartMs`. The
-   * producer's retention can include records from app process runs that
-   * happened before the current MCP session started; without this floor a
-   * vanilla `search_evidence({source:"poppo_http"})` returns history from
-   * previous runs.
+   * v2-G.1 Block B — agent-facing preview. Truncates `body.text` /
+   * `body.decoded` hotspots on request + response envelopes, leaves all
+   * other fields intact. See `preview.ts` for the algorithm + thresholds.
+   * Runtime wraps the returned record as `{...result.record, _meta:{preview:{...}}}`
+   * before emit; the `_meta` reservation invariant fires on both raw page
+   * records (parseLine output) and the hook's output (this function's
+   * return), per Phase 1 audit refinement.
+   */
+  previewForAgent(record: ParsedRecord) {
+    return previewPoppoHttpRecord(record);
+  },
+
+  /**
+   * R1 — clamp `tsMsRange.from` to at least `ctx.sessionStartMs` WHEN the
+   * agent provided `tsMsRange`. The producer's retention can include records
+   * from app process runs that happened before the current MCP session
+   * started, so when the agent IS doing time-window filtering, the floor
+   * keeps cross-session records out.
+   *
+   * v2-G.1 Round 1 amendment (codex STOP 2026-05-28 #2): do NOT synthesize
+   * a partial `tsMsRange` for agent queries that omit it. v0.5.0 behavior
+   * was to inject `{tsMsRange:{from:sessionStartMs}}` for any narrowing
+   * query, but Block A tightening (Q8) requires effective parsedQuery to
+   * preserve the schema invariant "tsMsRange absent OR {from,to} both
+   * bounded with window <= 24h". Synthesizing a single-from range would
+   * violate that invariant downstream.
+   *
+   * Agents that need the session floor must explicitly pass `tsMsRange`
+   * with both bounds; agents using `pathPrefix` / `methodIn` / etc. without
+   * `tsMsRange` get no implicit time window — narrowingFilter already
+   * accepts those positive fields as sufficient.
    */
   bindSession(query: EvidenceQuery, ctx: EvidenceContext): EvidenceQuery {
     const q = query as PoppoHttpQuery;
-    const providedFrom = q.tsMsRange?.from;
-    const floor =
-      providedFrom === undefined ? ctx.sessionStartMs : Math.max(providedFrom, ctx.sessionStartMs);
-    const tsMsRange = { ...(q.tsMsRange ?? {}), from: floor };
-    return { ...q, tsMsRange } as EvidenceQuery;
+    if (q.tsMsRange === undefined) return query;
+    return {
+      ...q,
+      tsMsRange: {
+        from: Math.max(q.tsMsRange.from, ctx.sessionStartMs),
+        to: q.tsMsRange.to,
+      },
+    } as EvidenceQuery;
   },
 
   /**

@@ -27,6 +27,14 @@ import type { PoppoHttpRecord } from "./record.ts";
  * `queryDispatch.dispatchQuery` as `query_malformed` if the agent adds an
  * unknown key.
  */
+/**
+ * Per-source window cap (v2-G.1 Block A tightening). `tsMsRange.to -
+ * tsMsRange.from` must not exceed 24h on agent input. Hardcoded here per
+ * Q5/Q8 — source-declared `evidenceWindowCapMs?` interface is a future
+ * v2-G.X candidate (trigger: second source whose window need differs).
+ */
+const MAX_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 export const PoppoHttpQuerySchema = z
   .object({
     source: z.literal("poppo_http"),
@@ -34,12 +42,24 @@ export const PoppoHttpQuerySchema = z
     methodIn: z.array(z.string().min(1).max(16)).min(1).max(10).optional(),
     outcome: z.enum(["ok", "http_error", "transport_error", "app_error"]).optional(),
     excludeHeartbeat: z.boolean().optional(),
+    // v2-G.1 Block A tightening: both bounds required + 24h window cap.
+    // Pre-tightening (v0.5.0) the schema accepted partial ranges, which let
+    // an agent pass `{from: 0}` and effectively defeat narrowingFilter:
+    // bindSession would clamp `from` up to sessionStartMs and the query
+    // became "all traffic since session start". Hard cut, no shim — there
+    // are no live callers at v0.5.0 cut (4a7e0e2). See preview-for-agent.md
+    // § Q8 / § Q9.
     tsMsRange: z
       .object({
-        from: z.number().int().optional(),
-        to: z.number().int().optional(),
+        from: z.number().int(),
+        to: z.number().int(),
       })
       .strict()
+      .refine((r) => r.to >= r.from, "tsMsRange.to must be >= tsMsRange.from")
+      .refine(
+        (r) => r.to - r.from <= MAX_WINDOW_MS,
+        `tsMsRange window must be <= ${MAX_WINDOW_MS / 1000}s (24h) for poppo_http`,
+      )
       .optional(),
     hostContains: z.string().min(1).max(255).optional(),
     durationMsGte: z.number().int().min(0).max(60_000).optional(),
@@ -101,8 +121,10 @@ export function matchPoppoHttpRecord(record: PoppoHttpRecord, query: PoppoHttpQu
   if (query.excludeHeartbeat === true && record.heartBeat === true) return false;
 
   if (query.tsMsRange !== undefined) {
-    if (query.tsMsRange.from !== undefined && record.tsMs < query.tsMsRange.from) return false;
-    if (query.tsMsRange.to !== undefined && record.tsMs > query.tsMsRange.to) return false;
+    // Both bounds required at schema layer (v2-G.1 Block A tightening) — no
+    // `!== undefined` guard needed on the individual fields.
+    if (record.tsMs < query.tsMsRange.from) return false;
+    if (record.tsMs > query.tsMsRange.to) return false;
   }
 
   if (query.hostContains !== undefined && !record.host.includes(query.hostContains)) {
