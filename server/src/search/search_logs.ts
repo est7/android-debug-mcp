@@ -37,6 +37,7 @@ export interface SearchOptions {
   readonly afterMark?: string;
   readonly tags?: readonly string[];
   readonly excludeTags?: readonly string[];
+  readonly pids?: readonly number[];
   readonly limit: number;
   readonly cursor?: string;
   readonly aggregate?: {
@@ -90,6 +91,7 @@ export async function searchLogs(
   const minRank = opts.level ? (LEVEL_RANK[opts.level] ?? 0) : 0;
   const tagSet = opts.tags ? new Set(opts.tags) : undefined;
   const excludeTagSet = opts.excludeTags ? new Set(opts.excludeTags) : undefined;
+  const pidSet = opts.pids ? new Set(opts.pids) : undefined;
 
   const aggregate = opts.aggregate;
   if (aggregate !== undefined) {
@@ -100,6 +102,7 @@ export async function searchLogs(
       queryLc,
       tagSet,
       excludeTagSet,
+      pidSet,
       start,
     });
   }
@@ -130,6 +133,7 @@ export async function searchLogs(
         queryLc,
         tagSet,
         excludeTagSet,
+        pidSet,
       })
     ) {
       resumeOffset = lineEnd;
@@ -177,6 +181,7 @@ interface AggregateContext {
   readonly queryLc: string | undefined;
   readonly tagSet: ReadonlySet<string> | undefined;
   readonly excludeTagSet: ReadonlySet<string> | undefined;
+  readonly pidSet: ReadonlySet<number> | undefined;
   readonly start: SearchCursor;
 }
 
@@ -206,6 +211,7 @@ async function aggregateLogs(
         queryLc: ctx.queryLc,
         tagSet: ctx.tagSet,
         excludeTagSet: ctx.excludeTagSet,
+        pidSet: ctx.pidSet,
       })
     ) {
       continue;
@@ -250,6 +256,7 @@ interface MatchContext {
   readonly queryLc: string | undefined;
   readonly tagSet: ReadonlySet<string> | undefined;
   readonly excludeTagSet: ReadonlySet<string> | undefined;
+  readonly pidSet: ReadonlySet<number> | undefined;
 }
 
 function matches(entry: LogEntry, offset: number, ctx: MatchContext): boolean {
@@ -259,6 +266,7 @@ function matches(entry: LogEntry, offset: number, ctx: MatchContext): boolean {
   if ((LEVEL_RANK[entry.level] ?? 0) < ctx.minRank) return false;
   if (ctx.tagSet !== undefined && !ctx.tagSet.has(entry.tag)) return false;
   if (ctx.excludeTagSet?.has(entry.tag)) return false;
+  if (ctx.pidSet !== undefined && !ctx.pidSet.has(entry.pid)) return false;
   if (ctx.opts.sinceTs !== undefined && entry.tsRaw < ctx.opts.sinceTs) return false;
   if (ctx.queryLc !== undefined && !entry.message.toLowerCase().includes(ctx.queryLc)) return false;
   return true;

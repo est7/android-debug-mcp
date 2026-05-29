@@ -107,6 +107,54 @@ describe("previewPoppoHttpRecord — small bodies pass through", () => {
   });
 });
 
+describe("previewPoppoHttpRecord — agent-facing redaction", () => {
+  it("redacts stable identifiers and credential headers before returning preview records", () => {
+    const record = makeRecord({
+      url: "https://api.example.com/homepage?_sign=SIG&_uid=37142512&smei_id=device-a&uuid=9906b0cc",
+      request: {
+        headers: [
+          { name: "Authorization", value: "Bearer req-secret" },
+          { name: "Cookie", value: "sid=req-cookie" },
+        ],
+        params: [
+          { name: "_sign", value: "SIG" },
+          { name: "_uid", value: "37142512" },
+          { name: "smei_id", value: "device-a" },
+          { name: "uuid", value: "9906b0cc" },
+        ],
+        decoded: null,
+        body: makeBody(),
+      },
+      response: {
+        status: 200,
+        headers: [{ name: "Set-Cookie", value: "sid=response-cookie" }],
+        body: makeBody({
+          text: '{"ok":true}',
+          textBytes: 11,
+          omittedReason: null,
+        }),
+        app: null,
+      },
+    });
+
+    const result = callPreview(record);
+    const serialized = JSON.stringify(result.record);
+    expect(serialized).not.toContain("req-secret");
+    expect(serialized).not.toContain("req-cookie");
+    expect(serialized).not.toContain("response-cookie");
+    expect(serialized).not.toContain("37142512");
+    expect(serialized).not.toContain("device-a");
+    expect(serialized).not.toContain("9906b0cc");
+    expect(serialized).not.toContain("SIG");
+    expect(serialized).toContain("[REDACTED]");
+    expect(result.truncated).toBe(false);
+    expect(result.truncatedFields).toEqual([]);
+    expect(result.redactedFields).toEqual(
+      expect.arrayContaining(["url", "request.headers", "request.params", "response.headers"]),
+    );
+  });
+});
+
 describe("previewPoppoHttpRecord — response body.text truncation", () => {
   it("oversize text → truncated to 1024-char head + suffix; textBytes preserved", () => {
     const original = "x".repeat(10_000);

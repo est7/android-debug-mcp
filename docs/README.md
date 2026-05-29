@@ -21,6 +21,7 @@
 | [`v2/v2-g-implementation-plan.md`](./v2/v2-g-implementation-plan.md) | v2-G 实施计划(5 phase + Phase 5 (ii) acceptance hardening;`fae127d` → `c5588db`;747 / 747 gates green) | locked 2026-05-26 |
 | [`v2/test-plan-v2g.md`](./v2/test-plan-v2g.md) | v2-G 8 scenario 真机 manual checklist(profile load / 损坏 / search happy / extract / lazy mtime hit / seal+bundle redact / release no-evidence / vanilla soft-empty) | Phase 5 (ii) 落盘 2026-05-26 |
 | [`v2/test-plan-v2g-evidence.md`](./v2/test-plan-v2g-evidence.md) | v2-G acceptance evidence ledger — 8/8 PASS,含 fix #1(bundle cap 64KiB→16MiB)+ fix #2(Block A "no fetch-all" 契约)实测物证 + 已知 v1 limitation 一条 | 2026-05-26 |
+| [`audits/tool-ux-e2e-2026-05-28-codex.md`](./audits/tool-ux-e2e-2026-05-28-codex.md) | 真机 e2e tool UX/contract 走查: session-scoped evidence、默认输出噪声、redaction/bundle、错误可恢复性、HomepageActivity API 物证 | 2026-05-28 |
 | `architecture.md` | 系统架构图、session 生命周期、数据流 | v1.1(未建立) |
 | [`test-plan.md`](./test-plan.md) | 5 scenario 真机 manual checklist | Phase 11 落盘 |
 | [`audits/`](./audits/) | 各阶段 codex audit 报告原文(phase-1 … phase-N) | living |

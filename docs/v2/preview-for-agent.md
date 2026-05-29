@@ -114,6 +114,10 @@ interface PreviewResult {
    *  shorthand).  Used by agent to decide whether to re-fetch with
    *  `fullRecords:true`.                                                 */
   readonly fullSizeBytes: number;
+  /** Field paths mutated by size-lossy preview. Empty when truncated:false. */
+  readonly truncatedFields: readonly string[];
+  /** Field paths masked for safety. Does not imply size truncation. */
+  readonly redactedFields?: readonly string[];
 }
 
 interface EvidenceSource {
@@ -129,10 +133,14 @@ interface EvidenceSource {
   字段(见 Q3,Round 1 amendment),agent 通过 schema 已知字段拿到,不需要解 wrapper。
 - `fullSizeBytes` 用 raw JSON utf8 byte 长度,**不是** 截断后体积。Agent 决策
   "要不要付 full" 用的是 raw size。
-- `truncated` 与 `fullSizeBytes` 都从 hook 返,而不是 runtime 计算 ——
+- `truncated` / `fullSizeBytes` / `truncatedFields` / `redactedFields` 都从
+  hook 返,而不是 runtime 计算 ——
   实现可以避免重序列化(`JSON.stringify(record)` 在大 record 上自身就吃 ms),
   source 可以在生成 preview 同时手算 `fullSizeBytes`(对 Poppo HTTP record 来说,
   `body.textBytes + body.decoded 序列化 size + 其它字段 size` 已知或廉价)。
+- `redactedFields` 与 `truncatedFields` 分离:前者表示 safety masking,不代表
+  agent 可通过 `fullRecords:true` 获得更高压缩收益;commands 字节账本只统计
+  `truncated:true` 的 size-lossy preview。
 
 #### Q3:截断 metadata 落在 record 哪里?
 
@@ -149,6 +157,8 @@ type RecordWithMeta = ParsedRecord & {
        *   ["response.body.text", "response.body.decoded", "request.body.text"]
        *  Empty array when truncated:false.                          */
       readonly truncatedFields: readonly string[];
+      /** Field paths masked for safety. Not counted as truncation. */
+      readonly redactedFields?: readonly string[];
     };
     // Future server-injected metadata (e.g. _meta.redaction, _meta.cached)
     // lives under same namespace; no shape migration needed at that point.
@@ -168,6 +178,9 @@ type RecordWithMeta = ParsedRecord & {
 - `truncatedFields[]` 让 agent 看到"哪几个字段被砍了" —— Poppo HTTP record
   body 有两面(`request.body` / `response.body`),还有 `decoded`;告诉 agent 哪面
   被砍能让它精确决策(只想看 response body 就 full-fetch 一次)。
+- `redactedFields[]` 让 agent 看到"哪些字段被安全脱敏",但它不改变
+  `truncated` 语义,也不进入 byte-savings audit。否则 redaction-only record 会误导
+  agent 走 `fullRecords:true` 去拿 raw 敏感数据。
 - `fullRecords:true` 路径 record 上**不出现** `_meta.preview`(完整记录没有
   截断 metadata 可言)。若 source 不实现 `previewForAgent?` hook,record 上
   也**不出现** `_meta`(等价 raw passthrough)。
@@ -258,7 +271,7 @@ searchEvidence(input) →
         if source.previewForAgent && !input.fullRecords:
             for r in pageRecords:
                 pr = source.previewForAgent(r)
-                pageRecords[i] = { ...pr.record, _meta: { preview: {truncated, fullSizeBytes, truncatedFields} } }
+                pageRecords[i] = { ...pr.record, _meta: { preview: {truncated, fullSizeBytes, truncatedFields, redactedFields?} } }
         // else: fullRecords:true OR source has no previewForAgent → pageRecords unchanged
         //       (raw passthrough; _meta absent because pre-projection guard verified it)
    ↓ return { records: pageRecords, nextCursor, pulls, statsRun }
@@ -458,6 +471,9 @@ agent input {tsMsRange:{from:0}}
   events 写真实 device IO(pull / capture / mark),preview 不属此类。
 - 不为 Q7 reject path(`fullRecords:true && limit > 10`)记 audit row —— 那是
   `query_malformed`,与 query schema 错同体例,handler 在 throw 前 not 写。
+- `redactedFields` 不进入 `truncatedRecords` / byte ledger。redaction-only preview
+  是 safety transform,不是 size-lossy transform;把它计入会污染压缩比,并误导
+  agent 用 `fullRecords:true` 取回原始敏感字段。
 
 **Round 1 amendment(codex advisory 2026-05-27):** Q10 原文用单字段 `truncatedBytesSum`
 但语义模糊 —— 是"原本会吃多少" 还是 "实际省了多少"?codex 抓为命名误导:从
@@ -474,7 +490,7 @@ Q7 reject path 不进 audit row(避免 swag 进 query_malformed 路径)。
 | 路径 | `_meta.preview` 是否出现 | 语义 |
 |---|---|---|
 | Source 未声明 `previewForAgent?` hook | **不出现** | raw passthrough,等价 `fullRecords:true` |
-| Source 声明了 hook,本条不达阈值(truncated:false) | **出现**,`{truncated:false, fullSizeBytes:N, truncatedFields:[]}` | "服务端跑了一次 preview,认定不需截断" |
+| Source 声明了 hook,本条不达阈值(truncated:false) | **出现**,`{truncated:false, fullSizeBytes:N, truncatedFields:[], redactedFields?:[...]}` | "服务端跑了一次 preview,认定不需截断";可能仍做 safety redaction |
 | `fullRecords:true` 显式开关 | **不出现** | agent 显式付代价 |
 | Soft-empty(无 profile / source 不存在) | N/A(`records:[]`) | dispatch 前就 return,不进 runtime |
 

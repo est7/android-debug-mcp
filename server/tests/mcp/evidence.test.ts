@@ -173,6 +173,23 @@ describe("search_logs tool", () => {
     expect(entries[0]?.tag).toBe("Net");
   });
 
+  it("filters an active run's logcat.jsonl by pid", async () => {
+    const h = await harness();
+    const { runId, runDir } = await startRun(h);
+    writeFileSync(
+      join(runDir, "logcat.jsonl"),
+      `${JSON.stringify({ ...LOG_E, rawLineNo: 1, pid: 100, message: "app error" })}\n${JSON.stringify({ ...LOG_E, rawLineNo: 2, pid: 200, message: "system error" })}\n`,
+    );
+    const r = await h.client.callTool({
+      name: "android_debug_search_logs",
+      arguments: { runId, level: "E", pids: [100] },
+    });
+    expect(r.isError).toBeFalsy();
+    const entries = structured(r).entries as Array<Record<string, unknown>>;
+    expect(entries.map((e) => e.rawLineNo)).toEqual([1]);
+    expect(entries[0]?.pid).toBe(100);
+  });
+
   it("aggregates a narrowed log search by tag", async () => {
     const h = await harness();
     const { runId, runDir } = await startRun(h);
@@ -197,6 +214,32 @@ describe("search_logs tool", () => {
       counts: [{ group: "App", count: 2 }],
       groupsTotal: 2,
       otherCount: 1,
+    });
+  });
+
+  it("applies pid narrowing in aggregation mode", async () => {
+    const h = await harness();
+    const { runId, runDir } = await startRun(h);
+    writeFileSync(
+      join(runDir, "logcat.jsonl"),
+      `${[
+        JSON.stringify({ ...LOG_E, rawLineNo: 1, level: "E", tag: "App", pid: 100 }),
+        JSON.stringify({ ...LOG_E, rawLineNo: 2, level: "W", tag: "Net", pid: 100 }),
+        JSON.stringify({ ...LOG_E, rawLineNo: 3, level: "E", tag: "App", pid: 200 }),
+      ].join("\n")}\n`,
+    );
+    const r = await h.client.callTool({
+      name: "android_debug_search_logs",
+      arguments: { runId, pids: [100], count: true, groupBy: "pid" },
+    });
+    expect(r.isError).toBeFalsy();
+    expect(structured(r)).toMatchObject({
+      entries: [],
+      matched: 2,
+      groupBy: "pid",
+      counts: [{ group: "100", count: 2 }],
+      groupsTotal: 1,
+      otherCount: 0,
     });
   });
 

@@ -71,6 +71,26 @@ describe("redactString — layer 2 (embedded credentials)", () => {
       "Cookie: sid=xyz; session=s3cret; theme=dark",
       "Cookie: ***",
     ],
+    [
+      "set-cookie — whole response cookie value redacted",
+      "Set-Cookie: sid=xyz; Path=/; HttpOnly",
+      "Set-Cookie: ***",
+    ],
+    [
+      "poppo URL stable identifiers",
+      "GET /homepage?_sign=SIG&_uid=37142512&smei_id=device-a&uuid=9906b0cc&ok=1",
+      "GET /homepage?_sign=***&_uid=***&smei_id=***&uuid=***&ok=1",
+    ],
+    [
+      "poppo stable identifiers accept colon separators",
+      '"smei_id":"9906b772cd3b27a0", device_id: 12345, uid: 37142512',
+      '"smei_id":"***", device_id: ***, uid: ***',
+    ],
+    [
+      "poppo uid key does not match inside longer words",
+      "liquid=5 squid=6 uid=7",
+      "liquid=5 squid=6 uid=***",
+    ],
     ["unquoted token keeps Bearer prefix", "token: Bearer abc.def", "token: Bearer ***"],
     ["clean text untouched", "the quick brown fox jumps", "the quick brown fox jumps"],
     ["tokenizer is not a kv pair", "the tokenizer settings page", "the tokenizer settings page"],

@@ -459,6 +459,9 @@ export function applyPostPageTransform(
           truncated: result.truncated,
           fullSizeBytes: result.fullSizeBytes,
           truncatedFields: result.truncatedFields,
+          ...(result.redactedFields !== undefined && result.redactedFields.length > 0
+            ? { redactedFields: result.redactedFields }
+            : {}),
         },
       },
     } as ParsedRecord;

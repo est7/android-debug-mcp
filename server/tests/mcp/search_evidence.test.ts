@@ -18,7 +18,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { sourceEvidenceDir } from "../../src/evidence/paths.ts";
 import { registerExtractEvidenceContext } from "../../src/mcp/tools/extract_evidence_context.ts";
-import { registerSearchEvidence } from "../../src/mcp/tools/search_evidence.ts";
+import {
+  computePreviewAudit,
+  registerSearchEvidence,
+} from "../../src/mcp/tools/search_evidence.ts";
 import { registerStartSession } from "../../src/mcp/tools/start_session.ts";
 import { registerStopSession } from "../../src/mcp/tools/stop_session.ts";
 import { registerTestProfile, unregisterTestProfile } from "../../src/profile/registry.ts";
@@ -421,6 +424,25 @@ describe("extract_evidence_context", () => {
     expect(err.error).toBe("invalid_argument");
   });
 
+  it("explains the 60s beforeMs/afterMs schema limit with a retry hint", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h, { withProfile: true });
+    const r = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(1716600000500).toISOString(),
+        beforeMs: 120_000,
+        afterMs: 20_000,
+        query: { source: "fake_src" },
+      },
+    });
+    expect(r.isError).toBe(true);
+    const text = callText(r);
+    expect(text).toContain("beforeMs must be <= 60000");
+    expect(text).toContain("Retry with beforeMs <= 60000");
+  });
+
   it("vanilla session → soft-empty with tsMsRange echoed", async () => {
     const h = await harness();
     const { runId } = await startRun(h); // no profile
@@ -710,6 +732,32 @@ describe("v2-G.1 Phase 3 — fullRecords + reject path", () => {
     // every truncated record (~110 bytes) saved ≈ 9999 - byteLen(rec).
     expect(searchRow?.savedBytesSum).toBeGreaterThan(0);
     expect(searchRow?.savedBytesSum).toBeLessThan(searchRow?.truncatedFullBytesSum as number);
+  });
+
+  it("commands preview audit ignores redacted-only preview metadata", () => {
+    const audit = computePreviewAudit(
+      [
+        {
+          source: "poppo_http",
+          url: "https://api.example.com/?uid=%5BREDACTED%5D",
+          _meta: {
+            preview: {
+              truncated: false,
+              fullSizeBytes: 5000,
+              truncatedFields: [],
+              redactedFields: ["url"],
+            },
+          },
+        },
+      ],
+      false,
+    );
+    expect(audit).toEqual({
+      fullRecords: false,
+      truncatedRecords: 0,
+      truncatedFullBytesSum: 0,
+      savedBytesSum: 0,
+    });
   });
 
   it("commands.jsonl audit row: fullRecords:true → sums all 0", async () => {

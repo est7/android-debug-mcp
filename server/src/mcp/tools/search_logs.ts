@@ -33,6 +33,11 @@ const inputSchema = z
       .min(1, "tags must list at least one tag")
       .max(100, "tags list too long")
       .optional(),
+    pids: z
+      .array(z.number().int().nonnegative("pid must be >= 0"))
+      .min(1, "pids must list at least one pid")
+      .max(100, "pids list too long")
+      .optional(),
     excludeTags: z
       .array(z.string().min(1, "tag must be non-empty").max(256, "tag too long"))
       .min(1, "excludeTags must list at least one tag")
@@ -84,7 +89,7 @@ const description = [
   "Search a debug run's parsed logcat (`logcat.jsonl`), streaming and paginated.",
   "",
   "Use when: the agent needs log lines matching a pattern, a severity, or a window relative to a `mark_event` marker — for an active or a finalized run.",
-  'Args: `runId`; at least one of `query` / `level` / `sinceTs` / `beforeMark` / `afterMark` / `tags` (the call requires at least one narrowing filter on EVERY call — `buffer`, `excludeTags`, and `cursor` alone do NOT count). `query` is a case-insensitive substring of the message; `level` is a severity threshold — `W` returns W/E/F; `buffer` (`main`/`system`/`crash`) defaults to `main`; `sinceTs` is a device-clock `MM-DD HH:MM:SS.mmm` prefix, kept lines `>=` it; `beforeMark` / `afterMark` name a `mark_event` mark — the logcat window before/after where that mark was placed; `tags` keeps only entries whose `tag` exactly matches one of these (case-sensitive); `excludeTags` drops entries whose `tag` matches (applied after `tags`); `limit` (1-500, default 100); `cursor` resumes pagination — pass the SAME positive filter from the first page on every subsequent page. Aggregation mode: `count:true` with `groupBy:"level"|"tag"|"pid"` scans the narrowed set and returns counts instead of log entries; optional `top` (1-100) keeps the largest groups. Aggregation does not accept `cursor`.',
+  'Args: `runId`; at least one of `query` / `level` / `sinceTs` / `beforeMark` / `afterMark` / `tags` / `pids` (the call requires at least one narrowing filter on EVERY call — `buffer`, `excludeTags`, and `cursor` alone do NOT count). `query` is a case-insensitive substring of the message; `level` is a severity threshold — `W` returns W/E/F; `buffer` (`main`/`system`/`crash`) defaults to `main`; `sinceTs` is a device-clock `MM-DD HH:MM:SS.mmm` prefix, kept lines `>=` it; `beforeMark` / `afterMark` name a `mark_event` mark — the logcat window before/after where that mark was placed; `tags` keeps only entries whose `tag` exactly matches one of these (case-sensitive); `pids` keeps only entries whose process id is listed (use `get_app_state.pids` to scope to the current app process); `excludeTags` drops entries whose `tag` matches (applied after `tags`); `limit` (1-500, default 100); `cursor` resumes pagination — pass the SAME positive filter from the first page on every subsequent page. Aggregation mode: `count:true` with `groupBy:"level"|"tag"|"pid"` scans the narrowed set and returns counts instead of log entries; optional `top` (1-100) keeps the largest groups. Aggregation does not accept `cursor`.',
   "Returns: normal mode `{entries[], scanned, matched, nextCursor?, truncated?, truncationMessage?}`. `nextCursor` present means more lines remain. `truncated` means one oversized log line had its message cut. Aggregation mode returns `{entries:[], scanned, matched, groupBy, counts:[{group,count}], groupsTotal, otherCount}` where `matched` is the total narrowed log-line count before grouping and `otherCount` is the count outside the returned top groups.",
   "Errors: `run_missing` for an unknown runId; `query_underspecified` when the call carries no positive narrowing filter (cursor / buffer / excludeTags alone do not count); `query_malformed` when aggregation fields are inconsistent; `invalid_cursor` for a malformed cursor; `mark_not_found` when `beforeMark` / `afterMark` names a mark not in the run.",
 ].join("\n");
@@ -123,11 +128,12 @@ export function registerSearchLogs(server: McpServer, manager: SessionManager): 
         input.sinceTs === undefined &&
         input.beforeMark === undefined &&
         input.afterMark === undefined &&
-        input.tags === undefined
+        input.tags === undefined &&
+        input.pids === undefined
       ) {
         throw new ToolDomainError(
           "query_underspecified",
-          "search_logs requires at least one narrowing filter on every call: query, level, sinceTs, beforeMark, afterMark, or tags. buffer / excludeTags / cursor alone do not narrow; on paginated calls pass the same filter as the first page.",
+          "search_logs requires at least one narrowing filter on every call: query, level, sinceTs, beforeMark, afterMark, tags, or pids. buffer / excludeTags / cursor alone do not narrow; on paginated calls pass the same filter as the first page.",
           { tool: "search_logs" },
         );
       }
@@ -162,6 +168,7 @@ export function registerSearchLogs(server: McpServer, manager: SessionManager): 
         ...(input.beforeMark !== undefined ? { beforeMark: input.beforeMark } : {}),
         ...(input.afterMark !== undefined ? { afterMark: input.afterMark } : {}),
         ...(input.tags !== undefined ? { tags: input.tags } : {}),
+        ...(input.pids !== undefined ? { pids: input.pids } : {}),
         ...(input.excludeTags !== undefined ? { excludeTags: input.excludeTags } : {}),
         ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
         ...(input.count === true && input.groupBy !== undefined

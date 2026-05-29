@@ -290,6 +290,44 @@ const POPPO_DIR = "/sdcard/Android/data/com.baitu.poppo/files/http-logs";
 // --- tests ------------------------------------------------------------------
 
 describe("poppo_http integration — R1 session scoping", () => {
+  it("warns when a poppo_http query has no tsMsRange and is therefore not session-scoped", async () => {
+    const h = await harness();
+    const { runId, sessionStartMs } = await startPoppoSession(h);
+
+    const today = new Date(sessionStartMs).toISOString().slice(0, 10);
+    const file = `${POPPO_DIR}/http_${today}_0.jsonl`;
+    setDeviceFile(
+      file,
+      sessionStartMs + 5_000,
+      [
+        record({ tsMs: sessionStartMs - 60_000, runId: "OLD-RUN", seq: 1, path: "/homepage" }),
+        record({ tsMs: sessionStartMs + 1_000, runId: "NEW-RUN", seq: 1, path: "/homepage" }),
+        "",
+      ].join("\n"),
+    );
+
+    const r = await h.client.callTool({
+      name: "android_debug_search_evidence",
+      arguments: {
+        runId,
+        query: {
+          source: "poppo_http",
+          pathPrefix: "/homepage",
+        },
+      },
+    });
+
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    const warnings = sc.warnings as string[];
+    expect(warnings).toEqual([
+      expect.stringContaining(
+        "poppo_http search is not session-scoped because query.tsMsRange is absent",
+      ),
+    ]);
+    expect(warnings[0]).toContain("extract_evidence_context");
+  });
+
   it("filters pre-session records in the same file (bindSession tsMs floor)", async () => {
     const h = await harness();
     const { runId, sessionStartMs } = await startPoppoSession(h);

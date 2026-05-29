@@ -101,11 +101,13 @@ export interface ParsedRecord {
  *
  * Returned `record` is the source's preview-shaped record; the runtime
  * wraps it as `{ ...record, _meta: { preview: { truncated, fullSizeBytes,
- * truncatedFields } } }` before handing back to the caller. `fullSizeBytes`
- * is the UTF-8 JSON byte length of the raw (pre-truncation) record — agents
- * use this to decide whether to re-fetch with `fullRecords: true`.
- * `truncatedFields` enumerates dotted field paths that were lossily
- * mutated; empty array when `truncated:false`.
+ * truncatedFields, redactedFields? } } }` before handing back to the caller.
+ * `fullSizeBytes` is the UTF-8 JSON byte length of the raw (pre-truncation)
+ * record — agents use this to decide whether to re-fetch with
+ * `fullRecords: true`. `truncatedFields` enumerates dotted field paths that
+ * were lossily size-truncated; empty array when `truncated:false`.
+ * `redactedFields` enumerates paths masked for safety and does not imply that
+ * `fullRecords:true` would save agent context.
  *
  * Sources without `previewForAgent?` declared fall through to raw
  * passthrough (no `_meta.preview` injected; see `preview-for-agent.md` § Q11
@@ -118,6 +120,7 @@ export interface PreviewResult {
   readonly truncated: boolean;
   readonly fullSizeBytes: number;
   readonly truncatedFields: readonly string[];
+  readonly redactedFields?: readonly string[];
 }
 
 /**

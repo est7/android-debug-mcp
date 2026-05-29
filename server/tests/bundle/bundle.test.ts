@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -82,6 +82,40 @@ describe("createBundle logs policy (§ C-4)", () => {
     const redacted = readFileSync(join(extractDir, RUN_ID, "logcat.redacted.jsonl"), "utf8");
     expect(redacted).not.toContain("c2VjcmV0");
     expect(JSON.parse(redacted.trim()).message).toBe("Authorization: ***");
+  });
+
+  it("omits macOS AppleDouble metadata files from the archive", async () => {
+    const runDir = makeRunDir();
+    writeFileSync(join(runDir, "._metadata.json"), "appledouble");
+    writeFileSync(join(runDir, "artifacts", "._screenshot.png"), "appledouble");
+    writeFileSync(join(runDir, ".DS_Store"), "finder");
+
+    const previous = process.env.COPYFILE_DISABLE;
+    process.env.COPYFILE_DISABLE = "1";
+    let bundlePath = "";
+    try {
+      const result = await createBundle({
+        runDir,
+        runId: RUN_ID,
+        bundlesDir: join(workDir, "bundles"),
+        logs: "none",
+        profile: null,
+      });
+      bundlePath = result.bundlePath;
+    } finally {
+      if (previous === undefined) {
+        // biome-ignore lint/performance/noDelete: must restore absence, not the string "undefined".
+        delete process.env.COPYFILE_DISABLE;
+      } else {
+        process.env.COPYFILE_DISABLE = previous;
+      }
+    }
+
+    const entries = await bundleEntries(bundlePath);
+    expect(entries.some((e) => e.split("/").some((part) => part.startsWith("._")))).toBe(false);
+    expect(entries.some((e) => e.endsWith(".DS_Store"))).toBe(false);
+    expect(existsSync(join(runDir, "._metadata.json"))).toBe(true);
+    expect(existsSync(join(runDir, ".DS_Store"))).toBe(true);
   });
 });
 

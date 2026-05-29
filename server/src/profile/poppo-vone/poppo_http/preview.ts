@@ -1,5 +1,6 @@
 import type { ParsedRecord, PreviewResult } from "../../types.ts";
 import type { PoppoHttpRecord } from "./record.ts";
+import { redactPoppoHttpRecord } from "./redact.ts";
 
 /**
  * v2-G.1 Block B — agent-facing record preview for poppo_http records.
@@ -189,6 +190,23 @@ function previewResponse(resp: PoppoResponse): {
   return { response: next, truncatedFields: mutated };
 }
 
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function redactedFieldPaths(raw: PoppoHttpRecord, redacted: PoppoHttpRecord): string[] {
+  const fields: string[] = [];
+  if (raw.url !== redacted.url) fields.push("url");
+  if (!sameJson(raw.request.headers, redacted.request.headers)) fields.push("request.headers");
+  if (!sameJson(raw.request.params, redacted.request.params)) fields.push("request.params");
+  if (raw.response !== null && redacted.response !== null) {
+    if (!sameJson(raw.response.headers, redacted.response.headers)) {
+      fields.push("response.headers");
+    }
+  }
+  return fields;
+}
+
 export function previewPoppoHttpRecord(record: ParsedRecord): PreviewResult {
   const r = record as PoppoHttpRecord;
 
@@ -198,16 +216,18 @@ export function previewPoppoHttpRecord(record: ParsedRecord): PreviewResult {
   const fullSizeBytes = Buffer.byteLength(JSON.stringify(r), "utf8");
 
   const truncatedFields: string[] = [];
-  let next: PoppoHttpRecord = r;
+  const redacted = redactPoppoHttpRecord(r);
+  const redactedFields = redactedFieldPaths(r, redacted);
+  let next: PoppoHttpRecord = redacted;
 
-  const reqResult = previewRequest(r.request as unknown as PoppoRequest);
+  const reqResult = previewRequest(redacted.request as unknown as PoppoRequest);
   if (reqResult.truncatedFields.length > 0) {
     next = { ...next, request: reqResult.request as unknown as PoppoHttpRecord["request"] };
     truncatedFields.push(...reqResult.truncatedFields);
   }
 
-  if (r.response !== null) {
-    const respResult = previewResponse(r.response as unknown as PoppoResponse);
+  if (redacted.response !== null) {
+    const respResult = previewResponse(redacted.response as unknown as PoppoResponse);
     if (respResult.truncatedFields.length > 0) {
       next = { ...next, response: respResult.response as unknown as PoppoHttpRecord["response"] };
       truncatedFields.push(...respResult.truncatedFields);
@@ -219,5 +239,6 @@ export function previewPoppoHttpRecord(record: ParsedRecord): PreviewResult {
     truncated: truncatedFields.length > 0,
     fullSizeBytes,
     truncatedFields,
+    ...(redactedFields.length > 0 ? { redactedFields } : {}),
   };
 }

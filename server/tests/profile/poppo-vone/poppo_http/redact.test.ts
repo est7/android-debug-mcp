@@ -118,7 +118,7 @@ describe("redactPoppoHttpRecord — header value masking", () => {
 });
 
 describe("redactPoppoHttpRecord — query param masking", () => {
-  it("masks _sign and _random in request.params", () => {
+  it("masks signature, stable user, and device identifiers in request.params", () => {
     const r = rec({
       request: {
         ...rec().request,
@@ -126,15 +126,19 @@ describe("redactPoppoHttpRecord — query param masking", () => {
           { name: "_uid", value: "12345" },
           { name: "_sign", value: "deadbeef" },
           { name: "_random", value: "abc123" },
+          { name: "smei_id", value: "device-a" },
+          { name: "uuid", value: "9906b0cc-1111-2222-3333-444455556666" },
           { name: "foo", value: "bar" },
         ],
       },
     });
     const out = redactPoppoHttpRecord(r);
     expect(out.request.params).toEqual([
-      { name: "_uid", value: "12345" },
+      { name: "_uid", value: "[REDACTED]" },
       { name: "_sign", value: "[REDACTED]" },
       { name: "_random", value: "[REDACTED]" },
+      { name: "smei_id", value: "[REDACTED]" },
+      { name: "uuid", value: "[REDACTED]" },
       { name: "foo", value: "bar" },
     ]);
   });
@@ -143,7 +147,7 @@ describe("redactPoppoHttpRecord — query param masking", () => {
 describe("redactPoppoHttpRecord — URL reconstruction", () => {
   it("reconstructs URL with scheme + port + dup params (codex audit R3 fixture)", () => {
     const r = rec({
-      url: "https://h:8443/p?a=1&_sign=x&a=2",
+      url: "https://h:8443/p?a=1&_sign=x&_uid=123&smei_id=device-a&uuid=9906b0cc&a=2",
       host: "h:8443",
       path: "/p",
       request: {
@@ -151,17 +155,25 @@ describe("redactPoppoHttpRecord — URL reconstruction", () => {
         params: [
           { name: "a", value: "1" },
           { name: "_sign", value: "x" },
+          { name: "_uid", value: "123" },
+          { name: "smei_id", value: "device-a" },
+          { name: "uuid", value: "9906b0cc" },
           { name: "a", value: "2" },
         ],
       },
     });
     const out = redactPoppoHttpRecord(r);
     // URL-encoded placeholder (codex audit #5).
-    expect(out.url).toBe("https://h:8443/p?a=1&_sign=%5BREDACTED%5D&a=2");
-    // Original params list — _sign value redacted; duplicate `a` order preserved.
+    expect(out.url).toBe(
+      "https://h:8443/p?a=1&_sign=%5BREDACTED%5D&_uid=%5BREDACTED%5D&smei_id=%5BREDACTED%5D&uuid=%5BREDACTED%5D&a=2",
+    );
+    // Original params list — sensitive values redacted; duplicate `a` order preserved.
     expect(out.request.params).toEqual([
       { name: "a", value: "1" },
       { name: "_sign", value: "[REDACTED]" },
+      { name: "_uid", value: "[REDACTED]" },
+      { name: "smei_id", value: "[REDACTED]" },
+      { name: "uuid", value: "[REDACTED]" },
       { name: "a", value: "2" },
     ]);
   });

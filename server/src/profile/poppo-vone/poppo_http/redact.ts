@@ -14,16 +14,17 @@ import type { PoppoHttpRecord } from "./record.ts";
  *    `name` is preserved (the fact that an Authorization header was sent
  *    is itself useful signal; only the secret value is sensitive).
  *
- * 2. **Query parameters** `_sign` and `_random` (Poppo's signature scheme):
+ * 2. **Query parameters** `_sign` / `_random` (Poppo's signature scheme)
+ *    plus stable user/device identifiers observed in Poppo URLs:
  *    matching entries in `request.params` get `value` replaced with raw
  *    `"[REDACTED]"`.
  *
- * 3. **URL field** — the full `url` carries the same `_sign`/`_random`
- *    values inline. Reconstruct via WHATWG `URL` so scheme/port/path are
- *    preserved exactly; rewrite `.search` from the redacted pair-list
- *    using `URLSearchParams` (insertion-order preserved, duplicate keys
- *    preserved). The placeholder ends up URL-encoded (`%5BREDACTED%5D`)
- *    per codex Phase 4 audit #5 — keeps the redacted URL a valid URL.
+ * 3. **URL field** — the full `url` carries those same values inline.
+ *    Reconstruct via WHATWG `URL` so scheme/port/path are preserved exactly;
+ *    rewrite `.search` from the redacted pair-list using `URLSearchParams`
+ *    (insertion-order preserved, duplicate keys preserved). The placeholder
+ *    ends up URL-encoded (`%5BREDACTED%5D`) per codex Phase 4 audit #5 —
+ *    keeps the redacted URL a valid URL.
  *
  * # What's NOT redacted (Q6: "其他全 raw")
  *
@@ -45,7 +46,19 @@ const SENSITIVE_HEADER_NAMES_LC = new Set([
   "proxy-authorization",
 ]);
 
-const SENSITIVE_QUERY_NAMES = new Set(["_sign", "_random"]);
+const SENSITIVE_QUERY_NAMES_LC = new Set([
+  "_sign",
+  "_random",
+  "_uid",
+  "uid",
+  "smei_id",
+  "uuid",
+  "device_id",
+  "imei",
+  "oaid",
+  "idfa",
+  "appsflyer_id",
+]);
 
 /** Raw placeholder used in header values. URL field uses the URL-encoded form. */
 const REDACTED_PLACEHOLDER = "[REDACTED]";
@@ -67,7 +80,7 @@ function redactHeaders(headers: readonly NameValue[]): NameValue[] {
 
 function redactQueryParams(params: readonly NameValue[]): NameValue[] {
   return params.map((p) => {
-    if (SENSITIVE_QUERY_NAMES.has(p.name)) {
+    if (SENSITIVE_QUERY_NAMES_LC.has(p.name.toLowerCase())) {
       return { ...p, value: REDACTED_PLACEHOLDER };
     }
     return p;
@@ -75,9 +88,9 @@ function redactQueryParams(params: readonly NameValue[]): NameValue[] {
 }
 
 /**
- * Rebuild the URL with redacted `_sign`/`_random` query values. Uses
- * WHATWG `URL` for scheme/host/port/path and `URLSearchParams` for the
- * search component — both preserve insertion order and duplicate keys.
+ * Rebuild the URL with redacted sensitive query values. Uses WHATWG `URL` for
+ * scheme/host/port/path and `URLSearchParams` for the search component — both
+ * preserve insertion order and duplicate keys.
  *
  * If `url` is unparseable (shouldn't happen — the producer writes a full
  * URL — but the record's schema is `.passthrough()` so we treat it
@@ -92,7 +105,7 @@ function redactUrl(url: string): string {
   }
   const search = new URLSearchParams();
   for (const [name, value] of parsed.searchParams) {
-    if (SENSITIVE_QUERY_NAMES.has(name)) {
+    if (SENSITIVE_QUERY_NAMES_LC.has(name.toLowerCase())) {
       search.append(name, REDACTED_PLACEHOLDER);
     } else {
       search.append(name, value);

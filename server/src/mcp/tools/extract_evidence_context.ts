@@ -46,13 +46,19 @@ const inputSchema = z
       .number()
       .int("beforeMs must be an integer")
       .min(MIN_WINDOW_MS, "beforeMs must be >= 0")
-      .max(MAX_WINDOW_MS, `beforeMs must be <= ${MAX_WINDOW_MS}`)
+      .max(
+        MAX_WINDOW_MS,
+        `beforeMs must be <= ${MAX_WINDOW_MS}. Retry with beforeMs <= ${MAX_WINDOW_MS}; use search_evidence with explicit tsMsRange for wider windows.`,
+      )
       .default(DEFAULT_WINDOW_MS),
     afterMs: z
       .number()
       .int("afterMs must be an integer")
       .min(MIN_WINDOW_MS, "afterMs must be >= 0")
-      .max(MAX_WINDOW_MS, `afterMs must be <= ${MAX_WINDOW_MS}`)
+      .max(
+        MAX_WINDOW_MS,
+        `afterMs must be <= ${MAX_WINDOW_MS}. Retry with afterMs <= ${MAX_WINDOW_MS}; use search_evidence with explicit tsMsRange for wider windows.`,
+      )
       .default(DEFAULT_WINDOW_MS),
     query: z
       .object({
@@ -102,7 +108,7 @@ const description = [
   "",
   "Use when: the agent has an interesting event (mark, crash, evidence_pulled) and wants the source's records inside the window around it.",
   "Args: `runId`; `markerIsoTs` (the `ts` field copied verbatim from a prior event); `beforeMs` / `afterMs` (0-60000, default 5000); `query` (must carry `source: <sourceId>` — same shape as `search_evidence.query`, minus any `tsMsRange` field — this tool injects a bounded `tsMsRange:{from,to}` from the marker, well within the 24h cap that `poppo_http` enforces on agent-supplied ranges); `limit` (1-500, default 100); `cursor` (opaque pagination); `fullRecords` (default `false` — records come back through the source's preview projection, with truncation metadata under `record._meta.preview`; pass `true` to disable preview and receive raw records, in which case `limit` is capped at 10).",
-  "Returns: `{records[], warnings?, nextCursor?, statsRun, tsMsRange}`. `tsMsRange` echoes the resolved `{from, to}` window so the agent can verify the math. When the source declares preview and `fullRecords` is not set, each record carries `record._meta.preview = {truncated, fullSizeBytes, truncatedFields}`.",
+  "Returns: `{records[], warnings?, nextCursor?, statsRun, tsMsRange}`. `tsMsRange` echoes the resolved `{from, to}` window so the agent can verify the math. When the source declares preview and `fullRecords` is not set, each record carries `record._meta.preview = {truncated, fullSizeBytes, truncatedFields, redactedFields?}`. `truncated/truncatedFields` mean size-lossy preview; `redactedFields` means safety masking and is not counted as truncation.",
   "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session went degraded; `invalid_argument` when `query.tsMsRange` is set (this tool owns that field); `query_malformed` when the source-specific fields fail per-source strict validation OR when `fullRecords:true` is combined with `limit > 10` (paginate instead); `invalid_cursor` for a tampered cursor.",
 ].join("\n");
 

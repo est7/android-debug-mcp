@@ -66,6 +66,12 @@ const KV_SECRET_QUOTED = /(token|password|otp|verification)("?\s*[:=]\s*)(["'])(
 const KV_SECRET_UNQUOTED =
   /(token|password|otp|verification)("?\s*[:=]\s*)(bearer\s+)?([^\s"'&;,}\]\n\r]+)/gi;
 
+// Poppo HTTP logs often embed signed URLs in free-text logcat lines. These
+// keys are stable user/device identifiers or request signatures, so they are
+// redacted even when they do not use generic names like `token`.
+const POPPO_STABLE_ID_UNQUOTED =
+  /(^|[^\w])(_sign|_random|_uid|uid|smei_id|uuid|device_id|imei|oaid|idfa|appsflyer_id)("?\s*[:=]\s*"?)([^\s"'&;,}\]\n\r]+)/gi;
+
 // A bare JSON Web Token: three base64url segments. `eyJ` is the base64 of `{"`,
 // so a JWT is recognizable even with no surrounding key.
 const JWT = /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{2,}/g;
@@ -86,6 +92,10 @@ export function redactString(s: string): string {
       KV_SECRET_UNQUOTED,
       (_m, name: string, sep: string, bearer: string | undefined) =>
         `${name}${sep}${bearer ?? ""}${REDACTED}`,
+    )
+    .replace(
+      POPPO_STABLE_ID_UNQUOTED,
+      (_m, prefix: string, name: string, sep: string) => `${prefix}${name}${sep}${REDACTED}`,
     )
     .replace(JWT, REDACTED);
 }

@@ -73,6 +73,7 @@ export async function createBundle(input: CreateBundleInput): Promise<BundleResu
   try {
     const stageRunDir = join(staging, runId);
     await cp(runDir, stageRunDir, { recursive: true });
+    await removeMacMetadataFiles(stageRunDir);
     // Q6 evidence redaction is mandatory and runs BEFORE applyLogsPolicy,
     // independent of `logs` mode — `logs:"raw"` only acks unredacted logcat,
     // never unredacted evidence.
@@ -87,6 +88,20 @@ export async function createBundle(input: CreateBundleInput): Promise<BundleResu
     return { bundlePath, byteSize, logs };
   } finally {
     await rm(staging, { recursive: true, force: true });
+  }
+}
+
+async function removeMacMetadataFiles(dir: string): Promise<void> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.name === ".DS_Store" || entry.name.startsWith("._")) {
+      await rm(path, { recursive: true, force: true });
+      continue;
+    }
+    if (entry.isDirectory()) {
+      await removeMacMetadataFiles(path);
+    }
   }
 }
 
