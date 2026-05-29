@@ -46,6 +46,24 @@ export interface SearchOptions {
   };
 }
 
+export type LogFilterOptions = Pick<
+  SearchOptions,
+  | "query"
+  | "level"
+  | "buffer"
+  | "sinceTs"
+  | "beforeMark"
+  | "afterMark"
+  | "tags"
+  | "excludeTags"
+  | "pids"
+>;
+
+export type LogEntryFilterOptions = Pick<
+  SearchOptions,
+  "query" | "level" | "buffer" | "sinceTs" | "tags" | "excludeTags" | "pids"
+>;
+
 export interface LogAggregate {
   readonly group: string;
   readonly count: number;
@@ -65,6 +83,31 @@ export interface SearchResult {
   /** True only when a single entry overflowed the budget and its message was cut. */
   readonly truncated?: boolean;
   readonly truncationMessage?: string;
+}
+
+export function hasPositiveLogFilter(opts: LogFilterOptions): boolean {
+  return (
+    opts.query !== undefined ||
+    opts.level !== undefined ||
+    opts.sinceTs !== undefined ||
+    opts.beforeMark !== undefined ||
+    opts.afterMark !== undefined ||
+    opts.tags !== undefined ||
+    opts.pids !== undefined
+  );
+}
+
+export function logEntryMatches(entry: LogEntry, opts: LogEntryFilterOptions): boolean {
+  return matches(entry, 0, {
+    afterOffset: null,
+    beforeOffset: null,
+    minRank: opts.level ? (LEVEL_RANK[opts.level] ?? 0) : 0,
+    opts: { ...opts, limit: 1 },
+    queryLc: opts.query?.toLowerCase(),
+    tagSet: opts.tags ? new Set(opts.tags) : undefined,
+    excludeTagSet: opts.excludeTags ? new Set(opts.excludeTags) : undefined,
+    pidSet: opts.pids ? new Set(opts.pids) : undefined,
+  });
 }
 
 /**
@@ -121,7 +164,7 @@ export async function searchLogs(
       break;
     }
     scanned++;
-    const entry = parseLine(text);
+    const entry = parseLogLine(text);
     const lineEnd = offset + Buffer.byteLength(text, "utf8") + 1;
     if (
       entry === null ||
@@ -200,7 +243,7 @@ async function aggregateLogs(
     ctx.start.offset,
   )) {
     scanned++;
-    const entry = parseLine(text);
+    const entry = parseLogLine(text);
     if (
       entry === null ||
       !matches(entry, offset, {
@@ -280,7 +323,7 @@ function cutMessage(entry: LogEntry): LogEntry {
 }
 
 /** Parse one logcat.jsonl line; a malformed / non-log line returns null and is skipped. */
-function parseLine(text: string): LogEntry | null {
+export function parseLogLine(text: string): LogEntry | null {
   let obj: Record<string, unknown>;
   try {
     obj = JSON.parse(text) as Record<string, unknown>;

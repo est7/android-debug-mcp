@@ -1,9 +1,19 @@
-import { basename } from "node:path";
+import { existsSync } from "node:fs";
+import { basename, join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { dispatchQuery } from "../../evidence/queryDispatch.ts";
 import { type PullSummary, type RunStats, searchEvidence } from "../../evidence/runtime.ts";
+import { logcatTsToEpochMs } from "../../logcat/ts.ts";
 import type { EvidenceQuery } from "../../profile/types.ts";
+import { readLinesFrom } from "../../search/line_reader.ts";
+import {
+  LOG_LEVELS,
+  type LogEntryFilterOptions,
+  hasPositiveLogFilter,
+  logEntryMatches,
+  parseLogLine,
+} from "../../search/search_logs.ts";
 import type { SessionManager } from "../../session/manager.ts";
 import { registerDebugTool } from "../register.ts";
 import { ToolDomainError } from "../toolError.ts";
@@ -39,6 +49,44 @@ const sourceQueryInput = z
     source: z.string().min(1, "source must be non-empty").max(64, "source must be <= 64 chars"),
   })
   .passthrough();
+
+const logcatTimelineQuerySchema = z
+  .object({
+    source: z.literal("logcat"),
+    query: z.string().min(1, "query must be non-empty").max(2_000, "query too long").optional(),
+    level: z.enum(LOG_LEVELS).optional(),
+    buffer: z.enum(["main", "system", "crash"]).optional(),
+    tags: z
+      .array(z.string().min(1, "tag must be non-empty").max(256, "tag too long"))
+      .min(1, "tags must list at least one tag")
+      .max(100, "tags list too long")
+      .optional(),
+    pids: z
+      .array(z.number().int().nonnegative("pid must be >= 0"))
+      .min(1, "pids must list at least one pid")
+      .max(100, "pids list too long")
+      .optional(),
+    excludeTags: z
+      .array(z.string().min(1, "tag must be non-empty").max(256, "tag too long"))
+      .min(1, "excludeTags must list at least one tag")
+      .max(100, "excludeTags list too long")
+      .optional(),
+  })
+  .strict();
+
+const eventsTimelineQuerySchema = z
+  .object({
+    source: z.literal("events"),
+    typeIn: z
+      .array(z.string().min(1, "event type must be non-empty").max(128, "event type too long"))
+      .min(1, "typeIn must list at least one event type")
+      .max(100, "typeIn list too long")
+      .optional(),
+  })
+  .strict();
+
+type LogcatTimelineQuery = z.output<typeof logcatTimelineQuerySchema>;
+type EventsTimelineQuery = z.output<typeof eventsTimelineQuerySchema>;
 
 const inputSchema = z
   .object({
@@ -112,8 +160,8 @@ const description = [
   "Extract evidence records around a marker timestamp recorded in a debug run's `events.jsonl`.",
   "",
   "Use when: the agent has an interesting event (mark, crash, evidence_pulled) and wants the source's records inside the window around it.",
-  "Args: `runId`; `markerIsoTs` (the `ts` field copied verbatim from a prior event); `beforeMs` / `afterMs` (0-60000, default 5000); exactly one of `query` or `sources`. `query` is the single-source, paginated path (must carry `source: <sourceId>` — same shape as `search_evidence.query`, minus any `tsMsRange` field; this tool injects a bounded `tsMsRange:{from,to}` from the marker). `sources` is the multi-source timeline path: an array of source-specific queries, each without `tsMsRange`; records are merged by `tsMs` into a digest sequence. `limit` (1-500, default 100); `cursor` (single-source `query` path only); `fields` (default digest; for `poppo_http` opt into sections: request.headers|request.params|request.body|request.decoded|response.headers|response.body); `fullRecords` (default `false`; pass `true` for all sections with body untruncated, still source-redacted, limit capped at 10).",
-  "Multi-source timeline: `sources` includes evidence sources only (for example `poppo_http` plus `poppo_nav`); logcat/events are not included. Multi-source mode is not paginated: when merged records exceed `limit`, the tool truncates the response and returns warning `multi-source truncated at limit; narrow ts/sources`.",
+  'Args: `runId`; `markerIsoTs` (the `ts` field copied verbatim from a prior event); `beforeMs` / `afterMs` (0-60000, default 5000); exactly one of `query` or `sources`. `query` is the single-source, paginated path (must carry `source: <sourceId>` — same shape as `search_evidence.query`, minus any `tsMsRange` field; this tool injects a bounded `tsMsRange:{from,to}` from the marker). `sources` is the multi-source timeline path: an array of source-specific queries, each without `tsMsRange`; records are merged by `tsMs` into a digest sequence. `sources` accepts profile evidence sources plus pseudo-sources `logcat` and `events`. `logcat` requires at least one positive narrowing filter (`query`, `level`, `tags`, or `pids`); if the run has no device timezone, it contributes no records and returns warning `logcat timeline unavailable: device timezone unknown`. `events` supports `typeIn`; `crash` events carry `ref:"crash#<index>"` for `extract_crash_context`, and `evidence_pulled` is suppressed unless explicitly requested by `typeIn`. `limit` (1-500, default 100); `cursor` (single-source `query` path only); `fields` (default digest; for `poppo_http` opt into sections: request.headers|request.params|request.body|request.decoded|response.headers|response.body); `fullRecords` (default `false`; pass `true` for all sections with body untruncated, still source-redacted, limit capped at 10).',
+  "Multi-source timeline is not paginated: when merged records exceed `limit`, the tool truncates the response and returns warning `multi-source truncated at limit; narrow ts/sources`.",
   "Returns: `{records[], warnings?, nextCursor?, statsRun, tsMsRange}`. `tsMsRange` echoes the resolved `{from, to}` window so the agent can verify the math. When the source declares preview, each record carries `record._meta.preview = {truncated, fullSizeBytes, truncatedFields, redactedFields?, available?, sizes?}`. `available/sizes` describe source sections available on that record after redaction. `truncated/truncatedFields` mean size-lossy preview; `redactedFields` means safety masking and is not counted as truncation.",
   "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session went degraded; `invalid_argument` when `query.tsMsRange` is set (this tool owns that field); `query_malformed` when the source-specific fields fail per-source strict validation OR when `fullRecords:true` is combined with `limit > 10` (paginate instead); `invalid_cursor` for a tampered cursor.",
 ].join("\n");
@@ -160,6 +208,176 @@ async function emitEvidencePulledEvent(
     trigger: pulls[0]?.trigger ?? "lazy",
     files: pulls.map((p) => basename(p.localPath)),
   });
+}
+
+function formatZodError(err: z.ZodError): string {
+  return err.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
+}
+
+function parseLogcatTimelineQuery(query: Record<string, unknown>): LogcatTimelineQuery {
+  const result = logcatTimelineQuerySchema.safeParse(query);
+  if (!result.success) {
+    throw new ToolDomainError(
+      "query_malformed",
+      `query for source 'logcat' failed validation: ${formatZodError(result.error)}`,
+      { source: "logcat" },
+    );
+  }
+  if (!hasPositiveLogFilter(logFilters(result.data))) {
+    throw new ToolDomainError(
+      "query_malformed",
+      "logcat timeline requires at least one narrowing filter: query, level, tags, or pids. buffer / excludeTags alone do not narrow.",
+      { source: "logcat" },
+    );
+  }
+  return result.data;
+}
+
+function parseEventsTimelineQuery(query: Record<string, unknown>): EventsTimelineQuery {
+  const result = eventsTimelineQuerySchema.safeParse(query);
+  if (!result.success) {
+    throw new ToolDomainError(
+      "query_malformed",
+      `query for source 'events' failed validation: ${formatZodError(result.error)}`,
+      { source: "events" },
+    );
+  }
+  return result.data;
+}
+
+function truncateLogMessage(message: string): string {
+  const maxChars = 200;
+  if (message.length <= maxChars) return message;
+  return `${message.slice(0, maxChars)}…[message cut: ${message.length} chars]`;
+}
+
+function logFilters(query: LogcatTimelineQuery): LogEntryFilterOptions {
+  return {
+    ...(query.query !== undefined ? { query: query.query } : {}),
+    ...(query.level !== undefined ? { level: query.level } : {}),
+    ...(query.buffer !== undefined ? { buffer: query.buffer } : {}),
+    ...(query.tags !== undefined ? { tags: query.tags } : {}),
+    ...(query.pids !== undefined ? { pids: query.pids } : {}),
+    ...(query.excludeTags !== undefined ? { excludeTags: query.excludeTags } : {}),
+  };
+}
+
+async function collectLogcatTimeline(input: {
+  readonly runDir: string;
+  readonly query: LogcatTimelineQuery;
+  readonly tsMsRange: { readonly from: number; readonly to: number };
+  readonly sessionStartMs: number;
+  readonly deviceTimezone: string;
+}): Promise<{ readonly records: Record<string, unknown>[]; readonly stats: RunStats }> {
+  const path = join(input.runDir, "logcat.jsonl");
+  const filters = logFilters(input.query);
+  const records: Record<string, unknown>[] = [];
+  let scanned = 0;
+
+  for await (const { text } of readLinesFrom(path)) {
+    scanned++;
+    const entry = parseLogLine(text);
+    if (entry === null || !logEntryMatches(entry, filters)) continue;
+    const tsMs = logcatTsToEpochMs(entry.tsRaw, input.sessionStartMs, input.deviceTimezone);
+    if (tsMs === null || tsMs < input.tsMsRange.from || tsMs > input.tsMsRange.to) continue;
+    records.push({
+      source: "logcat",
+      tsMs,
+      level: entry.level,
+      tag: entry.tag,
+      pid: entry.pid,
+      message: truncateLogMessage(entry.message),
+      rawLineNo: entry.rawLineNo,
+    });
+  }
+
+  return {
+    records,
+    stats: {
+      filesScanned: existsSync(path) ? 1 : 0,
+      recordsScanned: scanned,
+      pullsTriggered: 0,
+      pulledFiles: [],
+    },
+  };
+}
+
+function parseEventLine(text: string): Record<string, unknown> | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function includeEvent(event: Record<string, unknown>, query: EventsTimelineQuery): boolean {
+  const type = event.type;
+  if (typeof type !== "string") return false;
+  if (query.typeIn !== undefined) return query.typeIn.includes(type);
+  return type !== "evidence_pulled";
+}
+
+function eventDigest(
+  event: Record<string, unknown>,
+  tsMs: number,
+  crashIndex: number | null,
+): Record<string, unknown> | null {
+  const type = event.type;
+  if (typeof type !== "string") return null;
+  const out: Record<string, unknown> = { source: "events", tsMs, type };
+  if (type === "mark" && typeof event.name === "string") {
+    out.name = event.name;
+  } else if (type === "lifecycle" && typeof event.phase === "string") {
+    out.phase = event.phase;
+  } else if (type === "crash") {
+    if (typeof event.crashType === "string") out.crashType = event.crashType;
+    if (typeof event.topFrame === "string") out.topFrame = event.topFrame;
+    if (crashIndex !== null) out.ref = `crash#${crashIndex}`;
+  } else if (type === "evidence_pulled" && typeof event.source === "string") {
+    out.evidenceSource = event.source;
+  }
+  return out;
+}
+
+async function collectEventsTimeline(input: {
+  readonly runDir: string;
+  readonly query: EventsTimelineQuery;
+  readonly tsMsRange: { readonly from: number; readonly to: number };
+}): Promise<{ readonly records: Record<string, unknown>[]; readonly stats: RunStats }> {
+  const path = join(input.runDir, "events.jsonl");
+  const records: Record<string, unknown>[] = [];
+  let scanned = 0;
+  let crashCount = 0;
+
+  for await (const { text } of readLinesFrom(path)) {
+    scanned++;
+    const event = parseEventLine(text);
+    if (event === null) continue;
+    const type = event.type;
+    const crashIndex = type === "crash" ? crashCount++ : null;
+    if (!includeEvent(event, input.query)) continue;
+    const tsRaw = event.ts;
+    if (typeof tsRaw !== "string") continue;
+    const tsMs = Date.parse(tsRaw);
+    if (!Number.isFinite(tsMs) || tsMs < input.tsMsRange.from || tsMs > input.tsMsRange.to) {
+      continue;
+    }
+    const digest = eventDigest(event, tsMs, crashIndex);
+    if (digest !== null) records.push(digest);
+  }
+
+  return {
+    records,
+    stats: {
+      filesScanned: existsSync(path) ? 1 : 0,
+      recordsScanned: scanned,
+      pullsTriggered: 0,
+      pulledFiles: [],
+    },
+  };
 }
 
 export function registerExtractEvidenceContext(server: McpServer, manager: SessionManager): void {
@@ -251,6 +469,37 @@ export function registerExtractEvidenceContext(server: McpServer, manager: Sessi
               "sources[].tsMsRange must not be set on extract_evidence_context — this tool injects tsMsRange from markerIsoTs/beforeMs/afterMs",
               { tool: "extract_evidence_context" },
             );
+          }
+
+          if (sourceQuery.source === "logcat") {
+            const parsed = parseLogcatTimelineQuery(sourceQuery as Record<string, unknown>);
+            const ctx = session.evidenceContext();
+            if (ctx.deviceTimezone === null) {
+              pushWarning(warnings, "logcat timeline unavailable: device timezone unknown");
+              continue;
+            }
+            const result = await collectLogcatTimeline({
+              runDir: session.runDir,
+              query: parsed,
+              tsMsRange,
+              sessionStartMs: ctx.sessionStartMs,
+              deviceTimezone: ctx.deviceTimezone,
+            });
+            stats = addStats(stats, result.stats);
+            records.push(...result.records);
+            continue;
+          }
+
+          if (sourceQuery.source === "events") {
+            const parsed = parseEventsTimelineQuery(sourceQuery as Record<string, unknown>);
+            const result = await collectEventsTimeline({
+              runDir: session.runDir,
+              query: parsed,
+              tsMsRange,
+            });
+            stats = addStats(stats, result.stats);
+            records.push(...result.records);
+            continue;
           }
 
           const decorated = { ...sourceQuery, tsMsRange };

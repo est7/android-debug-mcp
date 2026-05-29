@@ -17,6 +17,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { sourceEvidenceDir } from "../../src/evidence/paths.ts";
+import { registerExtractCrashContext } from "../../src/mcp/tools/extract_crash_context.ts";
 import { registerExtractEvidenceContext } from "../../src/mcp/tools/extract_evidence_context.ts";
 import {
   computePreviewAudit,
@@ -70,6 +71,10 @@ vi.mock("../../src/adb/devices.ts", () => ({
   ],
 }));
 
+const devicePropsState = vi.hoisted(() => ({
+  timezone: "Asia/Shanghai" as string | null,
+}));
+
 vi.mock("../../src/adb/app.ts", () => ({
   getCurrentUser: async () => 0,
   getPackageVersion: async () => ({ versionName: "9.9.9", versionCode: "999" }),
@@ -78,7 +83,7 @@ vi.mock("../../src/adb/app.ts", () => ({
     apiLevel: 33,
     abi: "arm64-v8a",
     buildFingerprint: "fp",
-    timezone: "Asia/Shanghai",
+    timezone: devicePropsState.timezone,
   }),
   getAppPids: async () => [],
   getAppUid: async () => "10100",
@@ -258,6 +263,27 @@ const multiProfile: Profile = {
   ],
 };
 
+const UNIFIED_PROFILE_NAME = "test-unified-timeline-profile";
+const UNIFIED_BASE_MS = new Date("2026-05-20T10:15:49.000+08:00").getTime();
+
+const unifiedProfile: Profile = {
+  name: UNIFIED_PROFILE_NAME,
+  evidenceSources: [
+    timelineSource(
+      "timeline_http",
+      "/d/unified_http.jsonl",
+      [`${UNIFIED_BASE_MS + 300}|http-after-tap`, `${UNIFIED_BASE_MS + 900}|http-late`, ""].join(
+        "\n",
+      ),
+    ),
+    timelineSource(
+      "timeline_nav",
+      "/d/unified_nav.jsonl",
+      [`${UNIFIED_BASE_MS + 200}|nav-after-tap`, ""].join("\n"),
+    ),
+  ],
+};
+
 // --- harness ------------------------------------------------------------------
 
 interface Harness {
@@ -276,6 +302,7 @@ async function harness(): Promise<Harness> {
   registerStopSession(server, manager);
   registerSearchEvidence(server, manager);
   registerExtractEvidenceContext(server, manager);
+  registerExtractCrashContext(server, manager);
   const [ct, st] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "0.0.0-test" });
   await Promise.all([server.connect(st), client.connect(ct)]);
@@ -311,9 +338,12 @@ beforeEach(() => {
   resetPathsCache();
   registerTestProfile(fakeProfile);
   registerTestProfile(multiProfile);
+  registerTestProfile(unifiedProfile);
+  devicePropsState.timezone = "Asia/Shanghai";
 });
 afterEach(async () => {
   for (const h of open.splice(0)) await h.shutdown();
+  unregisterTestProfile(UNIFIED_PROFILE_NAME);
   unregisterTestProfile(MULTI_PROFILE_NAME);
   unregisterTestProfile(TEST_PROFILE_NAME);
   vi.restoreAllMocks();
@@ -341,6 +371,68 @@ async function startRun(
   });
   const sc = structured(r);
   return { runId: sc.runId as string, runDir: sc.runDir as string };
+}
+
+function writeUnifiedTimelineFiles(runDir: string): void {
+  writeFileSync(
+    join(runDir, "logcat.jsonl"),
+    [
+      JSON.stringify({
+        tsRaw: "05-20 10:15:49.250",
+        rawLineNo: 10,
+        buffer: "main",
+        level: "W",
+        tag: "Poppo",
+        pid: 1234,
+        tid: 1235,
+        message: "tap triggered warning",
+      }),
+      JSON.stringify({
+        tsRaw: "05-20 10:15:49.450",
+        rawLineNo: 11,
+        buffer: "main",
+        level: "E",
+        tag: "AndroidRuntime",
+        pid: 1234,
+        tid: 1235,
+        message: "FATAL EXCEPTION: main",
+      }),
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(runDir, "events.jsonl"),
+    [
+      JSON.stringify({
+        type: "mark",
+        name: "tap",
+        ts: new Date(UNIFIED_BASE_MS + 100).toISOString(),
+      }),
+      JSON.stringify({
+        type: "crash",
+        crashType: "java",
+        topFrame: "com.baitu.poppo.HomepageActivity.onCreate",
+        ts: new Date(UNIFIED_BASE_MS + 400).toISOString(),
+      }),
+      JSON.stringify({
+        type: "evidence_pulled",
+        source: "timeline_http",
+        trigger: "lazy",
+        ts: new Date(UNIFIED_BASE_MS + 500).toISOString(),
+      }),
+      "",
+    ].join("\n"),
+  );
+  const rawLines = [
+    "05-20 10:15:49.430  1234  1235 E AndroidRuntime: FATAL EXCEPTION: main",
+    "05-20 10:15:49.431  1234  1235 E AndroidRuntime: java.lang.NullPointerException: boom",
+    "05-20 10:15:49.432  1234  1235 E AndroidRuntime: \tat com.baitu.poppo.HomepageActivity.onCreate(HomepageActivity.kt:42)",
+  ];
+  writeFileSync(join(runDir, "logcat.raw.txt"), `${rawLines.join("\n")}\n`);
+  writeFileSync(
+    join(runDir, "crash.jsonl"),
+    `${JSON.stringify({ rawLineNo: 1, type: "java", marker: "FATAL EXCEPTION", line: rawLines[0] })}\n`,
+  );
 }
 
 // --- tests --------------------------------------------------------------------
@@ -557,6 +649,154 @@ describe("extract_evidence_context", () => {
     ]);
     expect(records.every((r) => r._meta?.preview?.truncated === false)).toBe(true);
     expect(records.every((r) => r._meta?.preview?.available?.length === 0)).toBe(true);
+  });
+
+  it("multi-source timeline merges events, logcat, and evidence records by epoch tsMs", async () => {
+    const h = await harness();
+    writeProfileJson(h.projectRoot, UNIFIED_PROFILE_NAME);
+    const { runId, runDir } = await startRun(h);
+    writeUnifiedTimelineFiles(runDir);
+
+    const r = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(UNIFIED_BASE_MS + 300).toISOString(),
+        beforeMs: 250,
+        afterMs: 250,
+        sources: [
+          { source: "events" },
+          { source: "timeline_nav" },
+          { source: "logcat", level: "W" },
+          { source: "timeline_http" },
+        ],
+        limit: 10,
+      },
+    });
+
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    expect(sc.warnings).toBeUndefined();
+    const records = sc.records as Array<{
+      source: string;
+      tsMs: number;
+      type?: string;
+      label?: string;
+      level?: string;
+      rawLineNo?: number;
+      ref?: string;
+    }>;
+    expect(
+      records.map((rec) => [rec.source, rec.tsMs, rec.type ?? rec.label ?? rec.level]),
+    ).toEqual([
+      ["events", UNIFIED_BASE_MS + 100, "mark"],
+      ["timeline_nav", UNIFIED_BASE_MS + 200, "nav-after-tap"],
+      ["logcat", UNIFIED_BASE_MS + 250, "W"],
+      ["timeline_http", UNIFIED_BASE_MS + 300, "http-after-tap"],
+      ["events", UNIFIED_BASE_MS + 400, "crash"],
+      ["logcat", UNIFIED_BASE_MS + 450, "E"],
+    ]);
+    expect(records.find((rec) => rec.source === "logcat")).toMatchObject({
+      rawLineNo: 10,
+      level: "W",
+    });
+    expect(records.find((rec) => rec.source === "events" && rec.type === "crash")).toMatchObject({
+      ref: "crash#0",
+    });
+
+    const crashContext = await h.client.callTool({
+      name: "android_debug_extract_crash_context",
+      arguments: { runId, crashIndex: 0, beforeLines: 0, afterLines: 2 },
+    });
+    expect(crashContext.isError).toBeFalsy();
+    expect(structured(crashContext).mainException).toContain("NullPointerException");
+  });
+
+  it("rejects logcat timeline source without a positive narrowing filter", async () => {
+    const h = await harness();
+    writeProfileJson(h.projectRoot, UNIFIED_PROFILE_NAME);
+    const { runId, runDir } = await startRun(h);
+    writeUnifiedTimelineFiles(runDir);
+
+    const r = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(UNIFIED_BASE_MS + 300).toISOString(),
+        sources: [{ source: "logcat" }],
+      },
+    });
+
+    expect(r.isError).toBe(true);
+    const err = JSON.parse(callText(r)) as { error: string; message: string };
+    expect(err.error).toBe("query_malformed");
+    expect(err.message).toContain("logcat timeline requires at least one narrowing filter");
+  });
+
+  it("returns a logcat warning but keeps other sources when device timezone is unknown", async () => {
+    const h = await harness();
+    devicePropsState.timezone = null;
+    writeProfileJson(h.projectRoot, UNIFIED_PROFILE_NAME);
+    const { runId, runDir } = await startRun(h);
+    writeUnifiedTimelineFiles(runDir);
+
+    const r = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(UNIFIED_BASE_MS + 300).toISOString(),
+        beforeMs: 250,
+        afterMs: 250,
+        sources: [{ source: "logcat", level: "W" }, { source: "timeline_nav" }],
+      },
+    });
+
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    expect(sc.warnings).toEqual(["logcat timeline unavailable: device timezone unknown"]);
+    const records = sc.records as Array<{ source: string; label?: string }>;
+    expect(records).toEqual([
+      expect.objectContaining({ source: "timeline_nav", label: "nav-after-tap" }),
+    ]);
+  });
+
+  it("suppresses evidence_pulled events by default but returns them when typeIn explicitly asks", async () => {
+    const h = await harness();
+    writeProfileJson(h.projectRoot, UNIFIED_PROFILE_NAME);
+    const { runId, runDir } = await startRun(h);
+    writeUnifiedTimelineFiles(runDir);
+
+    const defaultOut = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(UNIFIED_BASE_MS + 500).toISOString(),
+        beforeMs: 0,
+        afterMs: 0,
+        sources: [{ source: "events" }],
+      },
+    });
+    expect(defaultOut.isError).toBeFalsy();
+    expect(structured(defaultOut).records).toEqual([]);
+
+    const explicitOut = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(UNIFIED_BASE_MS + 500).toISOString(),
+        beforeMs: 0,
+        afterMs: 0,
+        sources: [{ source: "events", typeIn: ["evidence_pulled"] }],
+      },
+    });
+    expect(explicitOut.isError).toBeFalsy();
+    expect(structured(explicitOut).records).toEqual([
+      expect.objectContaining({
+        source: "events",
+        tsMs: UNIFIED_BASE_MS + 500,
+        type: "evidence_pulled",
+      }),
+    ]);
   });
 
   it("injects tsMsRange from markerIsoTs + before/afterMs and echoes it back", async () => {
