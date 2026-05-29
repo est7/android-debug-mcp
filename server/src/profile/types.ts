@@ -115,12 +115,19 @@ export interface ParsedRecord {
  * by either `runStreamPath` or `runSortPath`, page-slice-after, after the
  * `_meta` reservation invariant has cleared.
  */
+export interface PreviewOpts {
+  readonly fields?: readonly string[];
+  readonly fullRecords?: boolean;
+}
+
 export interface PreviewResult {
   readonly record: ParsedRecord;
   readonly truncated: boolean;
   readonly fullSizeBytes: number;
   readonly truncatedFields: readonly string[];
   readonly redactedFields?: readonly string[];
+  readonly available?: readonly string[];
+  readonly sizes?: Readonly<Record<string, number>>;
 }
 
 /**
@@ -282,11 +289,11 @@ export interface EvidenceSource {
    * Sources without this hook fall through to raw passthrough; agents read
    * the absence of `_meta` on the response record as "this source does not
    * support preview" (see `preview-for-agent.md` § Q11 three-row table).
-   * Agents may also opt out per-call via `fullRecords: true` on
-   * `search_evidence` / `extract_evidence_context` — that path SKIPS this
-   * hook entirely. Reserved-key invariant still fires either way.
+   * `fullRecords: true` on `search_evidence` / `extract_evidence_context`
+   * is passed into this hook as an option so the source can return a
+   * full-section, untruncated, still-redacted projection.
    */
-  previewForAgent?(record: ParsedRecord): PreviewResult;
+  previewForAgent?(record: ParsedRecord, opts: PreviewOpts): PreviewResult;
 
   /**
    * OPTIONAL — Phase 4 amendment (codex audit R2).

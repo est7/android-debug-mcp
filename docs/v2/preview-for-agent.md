@@ -4,6 +4,30 @@
 round 4 final verify `2026-05-28T03-18-43.332Z` thread `review/v2-g1-preview-for-agent`)。
 Drafted 2026-05-27 v0.5.0 cut 之后,作为 v0.6.0 sprint Tier 1 第一件。
 
+## v2-H H1 amendment — digest / fields / redacted fullRecords
+
+Locked 2026-05-29 by `v2-h-implementation-plan.md` Phase H1. This section is
+an additive override to the v2-G.1 text below:
+
+- `previewForAgent(record, opts)` now receives `opts = {fields?, fullRecords?}`.
+- Hook-backed sources are always called. `fullRecords:true` is no longer a
+  runtime bypass; it asks the source for all sections, no body truncation, and
+  still-redacted output. No-hook sources remain raw passthrough with no
+  `_meta.preview`.
+- `poppo_http` default output is digest-only:
+  `{source, tsMs, runId, seq, method, path, host, status, durationMs, outcome,
+  heartBeat, app}`.
+- `fields` is an opt-in section list for `poppo_http`:
+  `request.headers | request.params | request.body | request.decoded |
+  response.headers | response.body`.
+- `PreviewResult` and `_meta.preview` include `available?: string[]` and
+  `sizes?: Record<string, number>` for source sections present on that record.
+  Sizes are computed from the redacted section values.
+- `request.decoded` is opt-in (`fields:["request.decoded"]` or
+  `fullRecords:true`) and recursively redacted by the same sensitive key set
+  as query params (`imei`, `oaid`, `smei_id`, `_uid`, `uuid`,
+  `appsflyer_id`, etc.).
+
 Grill 进度:
 - **Round 1**(2026-05-27,codex STOP) — 5 条 blocking + 3 条 advisory + 6 条
   open-question 答案,**全部 fold-in 完毕**;详见 § Amendments § "Round 1"。
@@ -118,11 +142,20 @@ interface PreviewResult {
   readonly truncatedFields: readonly string[];
   /** Field paths masked for safety. Does not imply size truncation. */
   readonly redactedFields?: readonly string[];
+  /** Source sections present on this record after redaction. */
+  readonly available?: readonly string[];
+  /** UTF-8 JSON byte size per available section after redaction. */
+  readonly sizes?: Readonly<Record<string, number>>;
+}
+
+interface PreviewOpts {
+  readonly fields?: readonly string[];
+  readonly fullRecords?: boolean;
 }
 
 interface EvidenceSource {
   // ... existing fields
-  previewForAgent?(record: ParsedRecord): PreviewResult;
+  previewForAgent?(record: ParsedRecord, opts: PreviewOpts): PreviewResult;
 }
 ```
 
@@ -181,9 +214,9 @@ type RecordWithMeta = ParsedRecord & {
 - `redactedFields[]` 让 agent 看到"哪些字段被安全脱敏",但它不改变
   `truncated` 语义,也不进入 byte-savings audit。否则 redaction-only record 会误导
   agent 走 `fullRecords:true` 去拿 raw 敏感数据。
-- `fullRecords:true` 路径 record 上**不出现** `_meta.preview`(完整记录没有
-  截断 metadata 可言)。若 source 不实现 `previewForAgent?` hook,record 上
-  也**不出现** `_meta`(等价 raw passthrough)。
+- v2-H H1 后,hook-backed source 的 `fullRecords:true` 路径仍出现
+  `_meta.preview`(`truncated:false`,全 section + body 不截断 + 脱敏)。若 source
+  不实现 `previewForAgent?` hook,record 上仍**不出现** `_meta`(raw passthrough)。
 
 **Round 1 amendment(codex STOP 2026-05-27 #5 + 开放问题 #1):**Q3 原文用 flat
 `_preview` 字段,理由是 YAGNI(只有一类 server-injected metadata)。codex 反对论据:
@@ -267,12 +300,12 @@ searchEvidence(input) →
         for r in pageRecords:                    // ALL records, regardless of preview path
             if r._meta !== undefined:
                 throw <_meta-collision error: source produced reserved key>
-   ↓ projection transform (Round 1 new):
-        if source.previewForAgent && !input.fullRecords:
+   ↓ projection transform (v2-H H1):
+        if source.previewForAgent:
             for r in pageRecords:
-                pr = source.previewForAgent(r)
-                pageRecords[i] = { ...pr.record, _meta: { preview: {truncated, fullSizeBytes, truncatedFields, redactedFields?} } }
-        // else: fullRecords:true OR source has no previewForAgent → pageRecords unchanged
+                pr = source.previewForAgent(r, {fields, fullRecords})
+                pageRecords[i] = { ...pr.record, _meta: { preview: {truncated, fullSizeBytes, truncatedFields, redactedFields?, available?, sizes?} } }
+        // else: source has no previewForAgent → pageRecords unchanged
         //       (raw passthrough; _meta absent because pre-projection guard verified it)
    ↓ return { records: pageRecords, nextCursor, pulls, statsRun }
 ```
@@ -320,17 +353,20 @@ source.parseLine 全局禁止产出)。最终落点:**collision 检测拔到 pre
 
 #### Q6:`search_evidence` / `extract_evidence_context` 的 `fullRecords` 参数
 
-**Decision:两 tool 各扩 `fullRecords?: boolean`(default `false`)。`true` 时
-跳过 `previewForAgent` 调用,record 原样返。**
+**Decision(v2-H H1 amendment):两 tool 各扩 `fullRecords?: boolean`(default
+`false`)。`true` 时仍调用 `previewForAgent`,由 source 返回全 section、body 不截断、
+但仍脱敏的 record。**
 
 ```ts
 // inputSchema 增量(strict 仍保):
+fields: z.array(z.string().min(1).max(64)).max(16).optional(),
 fullRecords: z.boolean().default(false).optional()
 ```
 
 - 默认 `false` —— 沿用"agent 默认拿便宜的、显式付代价拿贵的"原则。
+- `fields` 默认空,即 digest-only;source 可把指定 section 挂到 digest 上。
 - `true` 时仍受 `limit` / `cursor` / narrowingFilter / window cap 全部 gate
-  约束(详见 Q8 关于 limit 的额外 cap)。
+  约束(详见 Q8 关于 limit 的额外 cap),且不绕过脱敏。
 
 #### Q7:`fullRecords:true` 时 `limit` 是否额外收紧?
 
@@ -491,7 +527,8 @@ Q7 reject path 不进 audit row(避免 swag 进 query_malformed 路径)。
 |---|---|---|
 | Source 未声明 `previewForAgent?` hook | **不出现** | raw passthrough,等价 `fullRecords:true` |
 | Source 声明了 hook,本条不达阈值(truncated:false) | **出现**,`{truncated:false, fullSizeBytes:N, truncatedFields:[], redactedFields?:[...]}` | "服务端跑了一次 preview,认定不需截断";可能仍做 safety redaction |
-| `fullRecords:true` 显式开关 | **不出现** | agent 显式付代价 |
+| `fullRecords:true` 显式开关(声明 hook 的 source) | **出现**,`{truncated:false, fullSizeBytes:N, truncatedFields:[], redactedFields?:[...], available?, sizes?}` | all sections + untruncated body, but still source-redacted |
+| `fullRecords:true` 显式开关(no-hook source) | **不出现** | raw passthrough legacy path |
 | Soft-empty(无 profile / source 不存在) | N/A(`records:[]`) | dispatch 前就 return,不进 runtime |
 
 理由:**Round 1 amendment(codex advisory 2026-05-27):** Q11 原文只写"Source 未
@@ -536,10 +573,10 @@ Phase 2 — poppo_http.previewForAgent impl + tsMsRange schema 双 required +
   - codex Phase 2 audit
 
 Phase 3 — tools 边界扩展 + reject 路径:
-  - search_evidence / extract_evidence_context inputSchema 加 fullRecords + handler:
+  - search_evidence / extract_evidence_context inputSchema 加 fields/fullRecords + handler:
       + fullRecords:true && limit > 10 → throw query_malformed(reject path)
-      + fullRecords:true:跳过 source.previewForAgent
-      + 默认(fullRecords:false 或缺):走 source.previewForAgent(若声明)
+      + fullRecords:true:仍走 source.previewForAgent(若声明),source 返回全 section + body 不截断 + 脱敏
+      + 默认(fullRecords:false 或缺):digest-only,fields 按需挂 section
   - Test:
       + fullRecords:true 路径 + 边界(limit==10 通过,limit==11 reject)
       + 默认 preview 路径在两 tool 上对称工作
@@ -838,8 +875,8 @@ Phase 4 末完结时跑下列 scenarios。Phase 1-3 中的 unit test 是 phase �
      `records[0]._meta.preview.truncatedFields` 含
      `"response.body.text"`(及 `decoded` 若产 producer 写了),
      `JSON.stringify(records[0]).length < 5_000`
-   - `fullRecords:true` fetch:`records[0]._meta === undefined`,
-     `JSON.stringify(records[0]).length > 600_000`
+   - `fullRecords:true` fetch:`records[0]._meta.preview.truncated === false`,
+     body 不截断但 `_sign`/`Set-Cookie`/decoded identifiers 仍为 `[REDACTED]`
 2. **preview hook no-op vs no-hook 区分** ——
    - **Hook no-op**(声明了 hook 但本条 ~200 byte 心跳):
      `records[0]._meta.preview.truncated === false`,
@@ -851,7 +888,7 @@ Phase 4 末完结时跑下列 scenarios。Phase 1-3 中的 unit test 是 phase �
 3. **`fullRecords:true && limit > 10` reject** —— `limit:11 + fullRecords:true`:
    - throw `query_malformed`,error message 明示
      "`fullRecords:true` requires `limit <= 10`; for more, paginate with `cursor`"
-   - `limit:10 + fullRecords:true`:正常返,records 不含 `_meta`
+   - `limit:10 + fullRecords:true`:正常返,hook-backed source 的 records 仍含 `_meta.preview`
 4. **tsMsRange 双 bounded** —— `{tsMsRange:{from:0}}` 单 from 提交:
    - `query_malformed`,error message 明示 `to` 必填
 5. **tsMsRange window cap** —— `{tsMsRange:{from:0, to:nowMs}}`(>24h):
@@ -860,7 +897,7 @@ Phase 4 末完结时跑下列 scenarios。Phase 1-3 中的 unit test 是 phase �
    - default fetch(`fullRecords:false`):marker + 60s 双 bounded → records 携
      `_meta.preview`,语义与 search_evidence 一致(`truncated:true` if any record
      在 hotspot 命中)
-   - `fullRecords:true` fetch:records 不含 `_meta`,内嵌 tsMsRange 仍 60s
+   - `fullRecords:true` fetch:records 含 `{_meta.preview.truncated:false}`,内嵌 tsMsRange 仍 60s
 7. **commands.jsonl 审计** —— preview happy path 跑完后:
    - 对应 row 含 `fullRecords:false`、`truncatedRecords > 0`、
      `truncatedFullBytesSum ≈ 622_000`、`savedBytesSum ≈ 617_000`(具体差值视

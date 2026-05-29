@@ -1,5 +1,4 @@
-import { runAdb } from "../../../adb/adb.ts";
-import { pullFile as adbPullFile, statMtimeMs } from "../../../adb/evidence.ts";
+import { pullFile as adbPullFile } from "../../../adb/evidence.ts";
 import type {
   DeviceFileEntry,
   EvidenceContext,
@@ -7,6 +6,10 @@ import type {
   EvidenceSource,
   ParsedRecord,
 } from "../../types.ts";
+import {
+  listDeviceLogFiles,
+  shouldKeepByFilenameDate as shouldKeepByFilenameDateWithPattern,
+} from "../device_files.ts";
 import { type PoppoHttpQuery, PoppoHttpQuerySchema, matchPoppoHttpRecord } from "./match.ts";
 import { previewPoppoHttpRecord } from "./preview.ts";
 import { type PoppoHttpRecord, parsePoppoHttpLine } from "./record.ts";
@@ -62,76 +65,12 @@ export function shouldKeepByFilenameDate(
   sessionStartMs: number,
   deviceTimezone: string | null,
 ): boolean {
-  const m = FILENAME_PATTERN.exec(filename);
-  if (m === null) return false;
-  const fileDate = m[1] as string; // YYYY-MM-DD
-  if (deviceTimezone === null) return true; // no date filter — keep all
-  const sessionStartLocalDate = localDateInZone(sessionStartMs, deviceTimezone);
-  if (sessionStartLocalDate === null) return true; // tz unparseable → no filter
-  const lowerBoundDate = shiftLocalDate(sessionStartLocalDate, -1);
-  // String compare on YYYY-MM-DD is correct lex order.
-  return fileDate >= lowerBoundDate;
-}
-
-/** Format `epochMs` in `tz` as a `YYYY-MM-DD` local-date string. */
-function localDateInZone(epochMs: number, tz: string): string | null {
-  try {
-    const fmt = new Intl.DateTimeFormat("en-CA", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-    const parts = fmt.formatToParts(new Date(epochMs));
-    let y = "";
-    let mo = "";
-    let d = "";
-    for (const p of parts) {
-      if (p.type === "year") y = p.value;
-      else if (p.type === "month") mo = p.value;
-      else if (p.type === "day") d = p.value;
-    }
-    if (y === "" || mo === "" || d === "") return null;
-    return `${y}-${mo}-${d}`;
-  } catch {
-    // Invalid tz string → Intl throws RangeError. Treat as "no filter".
-    return null;
-  }
-}
-
-/** Add `deltaDays` to a `YYYY-MM-DD` string (uses UTC math to avoid DST drift). */
-function shiftLocalDate(yyyymmdd: string, deltaDays: number): string {
-  const d = new Date(`${yyyymmdd}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + deltaDays);
-  return d.toISOString().slice(0, 10);
-}
-
-/**
- * Parse `adb shell ls -1` stdout into clean basename strings. Empty lines
- * and lines containing whitespace are dropped — defensive against a future
- * BusyBox `ls` variant that prefixes with `total N` or similar.
- */
-function parseLsOutput(stdout: string): string[] {
-  return stdout
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l !== "" && !/[\s]/.test(l));
-}
-
-/** Stat-fold helper: stat each candidate, skip the ones that disappeared. */
-async function statCandidates(
-  deviceSerial: string,
-  dir: string,
-  names: readonly string[],
-): Promise<DeviceFileEntry[]> {
-  const out: DeviceFileEntry[] = [];
-  for (const name of names) {
-    const path = `${dir}/${name}`;
-    const mtimeMs = await statMtimeMs(deviceSerial, path);
-    if (mtimeMs === null) continue; // stale ls entry — file rotated between list + stat
-    out.push({ path, name, mtimeMs });
-  }
-  return out;
+  return shouldKeepByFilenameDateWithPattern(
+    filename,
+    FILENAME_PATTERN,
+    sessionStartMs,
+    deviceTimezone,
+  );
 }
 
 export const poppoHttpSource: EvidenceSource = {
@@ -141,27 +80,9 @@ export const poppoHttpSource: EvidenceSource = {
 
   async listDeviceFiles(ctx: EvidenceContext): Promise<readonly DeviceFileEntry[]> {
     const dir = deviceLogsDir(ctx.packageName);
-    // Use allowNonZero so a missing dir (ENOENT in the underlying ls) maps
-    // to a soft empty rather than throwing — schema § listDeviceFiles
-    // contract: "Returns `[]` (not an error) when the device dir is absent."
-    const res = await runAdb(["-s", ctx.deviceSerial, "shell", "ls", "-1", dir], {
-      timeoutMs: 8_000,
-      allowNonZero: true,
-    });
-    if (res.exitCode !== 0) {
-      // Distinguish "dir missing" (normal — vanilla app, debug build not run)
-      // from "real adb failure" by looking for the canonical ENOENT message.
-      // Anything else throws so the agent sees a clean diagnostic.
-      const stderr = res.stderr.trim();
-      if (/No such file or directory/i.test(stderr)) return [];
-      throw new Error(
-        `adb shell ls ${dir} exited ${res.exitCode}: ${stderr || res.stdout.trim() || "<no output>"}`,
-      );
-    }
-    const names = parseLsOutput(res.stdout).filter((n) =>
+    return await listDeviceLogFiles(ctx.deviceSerial, dir, (n) =>
       shouldKeepByFilenameDate(n, ctx.sessionStartMs, ctx.deviceTimezone),
     );
-    return await statCandidates(ctx.deviceSerial, dir, names);
   },
 
   async pullFile(
@@ -222,8 +143,8 @@ export const poppoHttpSource: EvidenceSource = {
    * records (parseLine output) and the hook's output (this function's
    * return), per Phase 1 audit refinement.
    */
-  previewForAgent(record: ParsedRecord) {
-    return previewPoppoHttpRecord(record);
+  previewForAgent(record: ParsedRecord, opts) {
+    return previewPoppoHttpRecord(record, opts);
   },
 
   /**

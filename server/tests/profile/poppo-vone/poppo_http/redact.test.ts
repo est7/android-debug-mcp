@@ -204,11 +204,25 @@ describe("redactPoppoHttpRecord — purity + scope", () => {
     expect(r.request.headers[0]?.value).toBe("secret");
   });
 
-  it("leaves body text / preview / decoded untouched (Q6 MVP scope)", () => {
+  it("redacts request.decoded recursively by sensitive key while preserving business fields", () => {
     const r = rec({
       request: {
         ...rec().request,
-        decoded: { sensitive: "stuff" },
+        decoded: {
+          imei: "imei-raw",
+          oaid: "oaid-raw",
+          smei_id: "smei-raw",
+          appsflyer_id: "appsflyer-raw",
+          _uid: "uid-raw",
+          uuid: "uuid-raw",
+          os_version: "14",
+          b_vpn: false,
+          nested: {
+            device_id: "device-raw",
+            keep: "business",
+          },
+          arr: [{ idfa: "idfa-raw", keep: 1 }],
+        },
         body: {
           ...rec().request.body,
           text: '{"password":"hunter2"}',
@@ -216,8 +230,46 @@ describe("redactPoppoHttpRecord — purity + scope", () => {
       },
     });
     const out = redactPoppoHttpRecord(r);
-    expect(out.request.decoded).toEqual({ sensitive: "stuff" });
+    expect(out.request.decoded).toEqual({
+      imei: "[REDACTED]",
+      oaid: "[REDACTED]",
+      smei_id: "[REDACTED]",
+      appsflyer_id: "[REDACTED]",
+      _uid: "[REDACTED]",
+      uuid: "[REDACTED]",
+      os_version: "14",
+      b_vpn: false,
+      nested: {
+        device_id: "[REDACTED]",
+        keep: "business",
+      },
+      arr: [{ idfa: "[REDACTED]", keep: 1 }],
+    });
     expect(out.request.body.text).toBe('{"password":"hunter2"}');
+  });
+
+  it("leaves scalar and null request.decoded values unchanged", () => {
+    expect(
+      redactPoppoHttpRecord(
+        rec({
+          request: {
+            ...rec().request,
+            decoded: "scalar",
+          },
+        }),
+      ).request.decoded,
+    ).toBe("scalar");
+
+    expect(
+      redactPoppoHttpRecord(
+        rec({
+          request: {
+            ...rec().request,
+            decoded: null,
+          },
+        }),
+      ).request.decoded,
+    ).toBeNull();
   });
 
   it("preserves response === null path (no error thrown)", () => {

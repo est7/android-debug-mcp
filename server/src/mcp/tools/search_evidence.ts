@@ -43,6 +43,7 @@ const inputSchema = z
       .max(500, "limit must be <= 500")
       .default(100),
     cursor: z.string().min(1, "cursor must be non-empty").optional(),
+    fields: z.array(z.string().min(1).max(64)).max(16).optional(),
     fullRecords: z.boolean().default(false).optional(),
   })
   .strict();
@@ -69,9 +70,9 @@ const description = [
   "Search a debug run's evidence (per-source JSONL files pulled from the device on demand), streaming and paginated.",
   "",
   "Use when: the agent wants records from an evidence source declared by the active session's profile (e.g. HTTP logs from `poppo_http`).",
-  "Args: `runId`; `query` (must carry `source: <sourceId>` PLUS at least one source-specific positive filter — e.g. for `poppo_http`: pathPrefix / methodIn / outcome / tsMsRange / hostContains / durationMsGte / errorTypeIn. `excludeHeartbeat` alone does NOT narrow; if you want records around a marker, use `extract_evidence_context` instead — it auto-injects `tsMsRange`); `limit` (1-500, default 100); `cursor` (opaque, from a prior `nextCursor` — pass the same `query` across pages); `fullRecords` (default `false` — records come back through the source's preview projection, with truncation metadata under `record._meta.preview`; pass `true` to disable preview and receive raw records, in which case `limit` is capped at 10).",
+  "Args: `runId`; `query` (must carry `source: <sourceId>` PLUS at least one source-specific positive filter — e.g. for `poppo_http`: pathPrefix / methodIn / outcome / tsMsRange / hostContains / durationMsGte / errorTypeIn. `excludeHeartbeat` alone does NOT narrow; if you want records around a marker, use `extract_evidence_context` instead — it auto-injects `tsMsRange`); `limit` (1-500, default 100); `cursor` (opaque, from a prior `nextCursor` — pass the same `query` across pages); `fields` (default digest; for `poppo_http` opt into sections: request.headers|request.params|request.body|request.decoded|response.headers|response.body); `fullRecords` (default `false`; pass `true` for all sections with body untruncated, still source-redacted, limit capped at 10).",
   "Source-specific shapes: for `poppo_http`, `tsMsRange` MUST be `{from:number,to:number}` — both bounds required, `to >= from`, window `to - from <= 24h` (86400000 ms). Partial ranges (e.g. `{from:0}`) are rejected as `query_malformed`. A `poppo_http` query without `tsMsRange` is allowed but not session-scoped; the response includes a warning. Use `extract_evidence_context` for narrow marker-anchored windows.",
-  "Returns: `{records[], warnings?, nextCursor?, statsRun}`. `warnings` lists soft-empty reasons and non-fatal query caveats such as `poppo_http` calls without `tsMsRange`. `statsRun` reports `{filesScanned, recordsScanned, pullsTriggered, pulledFiles}` for audit / agent metrics. When the source declares preview and `fullRecords` is not set, each record carries `record._meta.preview = {truncated:boolean, fullSizeBytes:number, truncatedFields:string[], redactedFields?:string[]}`. `truncated/truncatedFields` mean size-lossy preview and can justify `fullRecords:true`; `redactedFields` means safety masking and is not counted as truncation.",
+  "Returns: `{records[], warnings?, nextCursor?, statsRun}`. `warnings` lists soft-empty reasons and non-fatal query caveats such as `poppo_http` calls without `tsMsRange`. `statsRun` reports `{filesScanned, recordsScanned, pullsTriggered, pulledFiles}` for audit / agent metrics. When the source declares preview, each record carries `record._meta.preview = {truncated:boolean, fullSizeBytes:number, truncatedFields:string[], redactedFields?:string[], available?:string[], sizes?:Record<string,number>}`. `truncated/truncatedFields` mean size-lossy preview and can justify `fullRecords:true`; `redactedFields` means safety masking and is not counted as truncation. `available/sizes` describe source sections available on that record after redaction.",
   "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session went degraded; `query_malformed` when the source-specific fields fail per-source strict validation OR when `fullRecords:true` is combined with `limit > 10` (paginate instead); `query_underspecified` when the source requires at least one narrowing filter and none is supplied; `invalid_cursor` for a tampered or stale cursor.",
 ].join("\n");
 
@@ -175,6 +176,7 @@ export function registerSearchEvidence(server: McpServer, manager: SessionManage
         limit: input.limit,
         cursor: input.cursor ?? null,
         mode: "lazy",
+        ...(input.fields !== undefined ? { fields: input.fields } : {}),
         fullRecords,
       });
 
@@ -208,10 +210,9 @@ export { toMutableStats };
  * v2-G.1 Phase 4 — preview audit aggregates for the commands.jsonl row.
  *
  * Computed per page from `result.records`. When the source declared a
- * preview hook AND the caller did not opt into `fullRecords:true`, every
- * record carries `_meta.preview = {truncated, fullSizeBytes,
- * truncatedFields, redactedFields?}`; we count only records that were
- * size-truncated and sum the byte ledger.
+ * preview hook, every record carries `_meta.preview = {truncated,
+ * fullSizeBytes, truncatedFields, redactedFields?, available?, sizes?}`;
+ * we count only records that were size-truncated and sum the byte ledger.
  *
  *   - `truncatedRecords` — how many records on this page were lossy.
  *   - `truncatedFullBytesSum` — `Σ fullSizeBytes` over the truncated set.
@@ -236,10 +237,10 @@ export function computePreviewAudit(
   records: readonly Record<string, unknown>[],
   fullRecords: boolean,
 ): PreviewAudit {
-  // When `fullRecords:true`, runtime skipped the preview projection, so no
-  // record carries `_meta.preview` — all sums stay 0 by construction.
-  // Similarly when the source has no `previewForAgent?` (no-hook fallback)
-  // the helper exits early and `_meta` is absent.
+  // `fullRecords:true` asks hook-backed sources for untruncated, still-redacted
+  // records; those preview metadata entries have `truncated:false`, so all
+  // byte-ledger sums stay 0 by construction. No-hook sources still omit
+  // `_meta.preview`.
   let truncatedRecords = 0;
   let truncatedFullBytesSum = 0;
   let savedBytesSum = 0;

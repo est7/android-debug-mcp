@@ -1,7 +1,8 @@
+import { basename } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { dispatchQuery } from "../../evidence/queryDispatch.ts";
-import { searchEvidence } from "../../evidence/runtime.ts";
+import { type PullSummary, type RunStats, searchEvidence } from "../../evidence/runtime.ts";
 import type { EvidenceQuery } from "../../profile/types.ts";
 import type { SessionManager } from "../../session/manager.ts";
 import { registerDebugTool } from "../register.ts";
@@ -33,6 +34,12 @@ const MIN_WINDOW_MS = 0;
 const MAX_WINDOW_MS = 60_000;
 const DEFAULT_WINDOW_MS = 5_000;
 
+const sourceQueryInput = z
+  .object({
+    source: z.string().min(1, "source must be non-empty").max(64, "source must be <= 64 chars"),
+  })
+  .passthrough();
+
 const inputSchema = z
   .object({
     runId: runIdInput,
@@ -60,14 +67,11 @@ const inputSchema = z
         `afterMs must be <= ${MAX_WINDOW_MS}. Retry with afterMs <= ${MAX_WINDOW_MS}; use search_evidence with explicit tsMsRange for wider windows.`,
       )
       .default(DEFAULT_WINDOW_MS),
-    query: z
-      .object({
-        source: z
-          .string()
-          .min(1, "query.source must be non-empty")
-          .max(64, "query.source must be <= 64 chars"),
-      })
-      .passthrough(),
+    query: sourceQueryInput.optional(),
+    sources: z
+      .array(sourceQueryInput)
+      .min(1, "sources must contain at least one source")
+      .optional(),
     limit: z
       .number()
       .int("limit must be an integer")
@@ -75,6 +79,7 @@ const inputSchema = z
       .max(500, "limit must be <= 500")
       .default(100),
     cursor: z.string().min(1, "cursor must be non-empty").optional(),
+    fields: z.array(z.string().min(1).max(64)).max(16).optional(),
     fullRecords: z.boolean().default(false).optional(),
   })
   .strict();
@@ -107,10 +112,55 @@ const description = [
   "Extract evidence records around a marker timestamp recorded in a debug run's `events.jsonl`.",
   "",
   "Use when: the agent has an interesting event (mark, crash, evidence_pulled) and wants the source's records inside the window around it.",
-  "Args: `runId`; `markerIsoTs` (the `ts` field copied verbatim from a prior event); `beforeMs` / `afterMs` (0-60000, default 5000); `query` (must carry `source: <sourceId>` — same shape as `search_evidence.query`, minus any `tsMsRange` field — this tool injects a bounded `tsMsRange:{from,to}` from the marker, well within the 24h cap that `poppo_http` enforces on agent-supplied ranges); `limit` (1-500, default 100); `cursor` (opaque pagination); `fullRecords` (default `false` — records come back through the source's preview projection, with truncation metadata under `record._meta.preview`; pass `true` to disable preview and receive raw records, in which case `limit` is capped at 10).",
-  "Returns: `{records[], warnings?, nextCursor?, statsRun, tsMsRange}`. `tsMsRange` echoes the resolved `{from, to}` window so the agent can verify the math. When the source declares preview and `fullRecords` is not set, each record carries `record._meta.preview = {truncated, fullSizeBytes, truncatedFields, redactedFields?}`. `truncated/truncatedFields` mean size-lossy preview; `redactedFields` means safety masking and is not counted as truncation.",
+  "Args: `runId`; `markerIsoTs` (the `ts` field copied verbatim from a prior event); `beforeMs` / `afterMs` (0-60000, default 5000); exactly one of `query` or `sources`. `query` is the single-source, paginated path (must carry `source: <sourceId>` — same shape as `search_evidence.query`, minus any `tsMsRange` field; this tool injects a bounded `tsMsRange:{from,to}` from the marker). `sources` is the multi-source timeline path: an array of source-specific queries, each without `tsMsRange`; records are merged by `tsMs` into a digest sequence. `limit` (1-500, default 100); `cursor` (single-source `query` path only); `fields` (default digest; for `poppo_http` opt into sections: request.headers|request.params|request.body|request.decoded|response.headers|response.body); `fullRecords` (default `false`; pass `true` for all sections with body untruncated, still source-redacted, limit capped at 10).",
+  "Multi-source timeline: `sources` includes evidence sources only (for example `poppo_http` plus `poppo_nav`); logcat/events are not included. Multi-source mode is not paginated: when merged records exceed `limit`, the tool truncates the response and returns warning `multi-source truncated at limit; narrow ts/sources`.",
+  "Returns: `{records[], warnings?, nextCursor?, statsRun, tsMsRange}`. `tsMsRange` echoes the resolved `{from, to}` window so the agent can verify the math. When the source declares preview, each record carries `record._meta.preview = {truncated, fullSizeBytes, truncatedFields, redactedFields?, available?, sizes?}`. `available/sizes` describe source sections available on that record after redaction. `truncated/truncatedFields` mean size-lossy preview; `redactedFields` means safety masking and is not counted as truncation.",
   "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session went degraded; `invalid_argument` when `query.tsMsRange` is set (this tool owns that field); `query_malformed` when the source-specific fields fail per-source strict validation OR when `fullRecords:true` is combined with `limit > 10` (paginate instead); `invalid_cursor` for a tampered cursor.",
 ].join("\n");
+
+function zeroStats(): RunStats {
+  return {
+    filesScanned: 0,
+    recordsScanned: 0,
+    pullsTriggered: 0,
+    pulledFiles: [],
+  };
+}
+
+function addStats(a: RunStats, b: RunStats): RunStats {
+  return {
+    filesScanned: a.filesScanned + b.filesScanned,
+    recordsScanned: a.recordsScanned + b.recordsScanned,
+    pullsTriggered: a.pullsTriggered + b.pullsTriggered,
+    pulledFiles: [...a.pulledFiles, ...b.pulledFiles],
+  };
+}
+
+function pushWarning(warnings: string[], warning: string): void {
+  if (!warnings.includes(warning)) warnings.push(warning);
+}
+
+function recordTsMs(record: Record<string, unknown>): number {
+  const tsMs = record.tsMs;
+  if (typeof tsMs !== "number" || !Number.isFinite(tsMs)) {
+    throw new Error("multi-source extract_evidence_context record is missing numeric tsMs");
+  }
+  return tsMs;
+}
+
+async function emitEvidencePulledEvent(
+  session: ReturnType<SessionManager["require"]>,
+  sourceId: string,
+  pulls: readonly PullSummary[],
+): Promise<void> {
+  if (pulls.length === 0) return;
+  await session.appendEvent({
+    type: "evidence_pulled",
+    source: sourceId,
+    trigger: pulls[0]?.trigger ?? "lazy",
+    files: pulls.map((p) => basename(p.localPath)),
+  });
+}
 
 export function registerExtractEvidenceContext(server: McpServer, manager: SessionManager): void {
   registerDebugTool(
@@ -148,10 +198,25 @@ export function registerExtractEvidenceContext(server: McpServer, manager: Sessi
         );
       }
 
+      const hasQuery = input.query !== undefined;
+      const hasSources = input.sources !== undefined;
+      if (hasQuery && hasSources) {
+        throw new ToolDomainError(
+          "query_malformed",
+          "query and sources are mutually exclusive; provide exactly one",
+          { tool: "extract_evidence_context" },
+        );
+      }
+      if (!hasQuery && !hasSources) {
+        throw new ToolDomainError("query_malformed", "one of query or sources is required", {
+          tool: "extract_evidence_context",
+        });
+      }
+
       // Q8: this tool owns tsMsRange — reject if the agent tried to set it too.
       // Loose check: the input.query is `.passthrough()` so we read it ad-hoc.
-      const queryWithMaybeTsRange = input.query as { tsMsRange?: unknown };
-      if (queryWithMaybeTsRange.tsMsRange !== undefined) {
+      const query = input.query;
+      if (query !== undefined && (query as { tsMsRange?: unknown }).tsMsRange !== undefined) {
         throw new ToolDomainError(
           "invalid_argument",
           "query.tsMsRange must not be set on extract_evidence_context — this tool injects tsMsRange from markerIsoTs/beforeMs/afterMs",
@@ -164,10 +229,101 @@ export function registerExtractEvidenceContext(server: McpServer, manager: Sessi
         from: markerMs - input.beforeMs,
         to: markerMs + input.afterMs,
       };
+
+      if (input.sources !== undefined) {
+        if (input.cursor !== undefined) {
+          throw new ToolDomainError(
+            "query_malformed",
+            "cursor is not supported with sources; multi-source extract_evidence_context is not paginated",
+            { tool: "extract_evidence_context" },
+          );
+        }
+
+        let stats = zeroStats();
+        const warnings: string[] = [];
+        const records: Record<string, unknown>[] = [];
+        let truncated = false;
+
+        for (const sourceQuery of input.sources) {
+          if ((sourceQuery as { tsMsRange?: unknown }).tsMsRange !== undefined) {
+            throw new ToolDomainError(
+              "invalid_argument",
+              "sources[].tsMsRange must not be set on extract_evidence_context — this tool injects tsMsRange from markerIsoTs/beforeMs/afterMs",
+              { tool: "extract_evidence_context" },
+            );
+          }
+
+          const decorated = { ...sourceQuery, tsMsRange };
+          const dispatched = dispatchQuery(session.profile, decorated);
+          if (dispatched.kind === "malformed") {
+            throw dispatched.error;
+          }
+          if (dispatched.kind === "soft_empty") {
+            pushWarning(warnings, dispatched.warning);
+            continue;
+          }
+
+          const result = await searchEvidence({
+            source: dispatched.source,
+            parsedQuery: dispatched.parsedQuery as EvidenceQuery,
+            ctx: session.evidenceContext(),
+            runId: input.runId,
+            runDir: session.runDir,
+            limit: input.limit,
+            cursor: null,
+            mode: "lazy",
+            ...(input.fields !== undefined ? { fields: input.fields } : {}),
+            fullRecords,
+          });
+
+          await emitEvidencePulledEvent(session, dispatched.source.id, result.pulls);
+          stats = addStats(stats, result.statsRun);
+          if (result.nextCursor !== null) truncated = true;
+          records.push(...result.records.map((r) => r as Record<string, unknown>));
+        }
+
+        records.sort((a, b) => {
+          const d = recordTsMs(a) - recordTsMs(b);
+          if (d !== 0) return d;
+          const sa = String(a.source);
+          const sb = String(b.source);
+          return sa < sb ? -1 : sa > sb ? 1 : 0;
+        });
+        if (records.length > input.limit) {
+          truncated = true;
+        }
+        const responseRecords = records.slice(0, input.limit);
+        if (truncated) {
+          pushWarning(warnings, "multi-source truncated at limit; narrow ts/sources");
+        }
+
+        const previewAudit = computePreviewAudit(responseRecords, fullRecords);
+        await session.appendCommand({
+          tool: "extract_evidence_context",
+          statsRun: stats,
+          pullsTriggered: stats.pullsTriggered,
+          pulledFiles: stats.pulledFiles.map((p) => basename(p)),
+          fullRecords: previewAudit.fullRecords,
+          truncatedRecords: previewAudit.truncatedRecords,
+          truncatedFullBytesSum: previewAudit.truncatedFullBytesSum,
+          savedBytesSum: previewAudit.savedBytesSum,
+        });
+
+        return ok({
+          records: responseRecords,
+          ...(warnings.length > 0 ? { warnings } : {}),
+          statsRun: toMutableStats(stats),
+          tsMsRange,
+        });
+      }
+
+      if (query === undefined) {
+        throw new Error("unreachable: query is required past sources branch");
+      }
       // Build the decorated query *after* the dispatch check so a profile
       // soft-empty path doesn't bother computing it (and so the per-source
       // strict validation sees the real shape including tsMsRange).
-      const decorated = { ...input.query, tsMsRange };
+      const decorated = { ...query, tsMsRange };
 
       const dispatched = dispatchQuery(session.profile, decorated);
       if (dispatched.kind === "malformed") {
@@ -210,6 +366,7 @@ export function registerExtractEvidenceContext(server: McpServer, manager: Sessi
         limit: input.limit,
         cursor: input.cursor ?? null,
         mode: "lazy",
+        ...(input.fields !== undefined ? { fields: input.fields } : {}),
         fullRecords,
       });
 

@@ -21,10 +21,9 @@ import type {
  *   - `_meta` reservation invariant (Q5b invariant #6) — must fire across
  *     all three call shapes regardless of whether the source declares
  *     `previewForAgent?` or whether the caller opts into `fullRecords:true`.
- *   - Preview projection — when the source declares `previewForAgent?` AND
- *     the caller did NOT opt out via `fullRecords:true`, the runtime injects
- *     `_meta.preview` on every page record. Otherwise raw passthrough (no
- *     `_meta`).
+ *   - Preview projection — when the source declares `previewForAgent?`, the
+ *     runtime calls it on every page record and passes `{fields, fullRecords}`.
+ *     Sources without a hook still fall through as raw passthrough.
  *
  * Each scenario uses a fake source with controllable `parseLine` output —
  * one variant emits records carrying `_meta` (contract bug shape) so the
@@ -43,7 +42,10 @@ function makeFakeSource(opts: {
   /** When true, parseLine stamps a forbidden `_meta` key on its output. */
   emitMeta?: boolean;
   /** When set, source declares `previewForAgent?` with this implementation. */
-  previewForAgent?: (record: ParsedRecord) => PreviewResult;
+  previewForAgent?: (
+    record: ParsedRecord,
+    opts: { readonly fields?: readonly string[]; readonly fullRecords?: boolean },
+  ) => PreviewResult;
   /** When true, source declares `sortKey?` so runtime takes the sort path. */
   sortable?: boolean;
 }): EvidenceSource {
@@ -145,7 +147,7 @@ describe("v2-G.1 Phase 1 — runtime _meta reservation invariant", () => {
     ).rejects.toThrow(_META_ERROR);
   });
 
-  it("fullRecords:true bypass: throws when parseLine emits _meta even though preview is skipped", async () => {
+  it("fullRecords:true: throws when parseLine emits _meta before preview projection", async () => {
     const source = makeFakeSource({
       files: [FILE],
       bytes: { [FILE.path]: BYTES },
@@ -277,16 +279,22 @@ describe("v2-G.1 Phase 1 — runtime previewForAgent projection", () => {
     }
   });
 
-  it("fullRecords:true: skips previewForAgent, raw passthrough, no _meta injection", async () => {
+  it("fullRecords:true: still calls previewForAgent and passes opts to the source", async () => {
+    const seen: Array<{ readonly fields?: readonly string[]; readonly fullRecords?: boolean }> = [];
     const source = makeFakeSource({
       files: [FILE],
       bytes: { [FILE.path]: BYTES },
-      previewForAgent: (record) => ({
-        record: { ...record, body: "[truncated]" },
-        truncated: true,
-        fullSizeBytes: 999,
-        truncatedFields: ["body"],
-      }),
+      previewForAgent: (record, opts) => {
+        seen.push(opts);
+        return {
+          record: { ...record, body: "[full-redacted]" },
+          truncated: false,
+          fullSizeBytes: 999,
+          truncatedFields: [],
+          available: ["body"],
+          sizes: { body: 15 },
+        };
+      },
     });
 
     const out = await searchEvidence({
@@ -298,13 +306,70 @@ describe("v2-G.1 Phase 1 — runtime previewForAgent projection", () => {
       limit: 100,
       cursor: null,
       fullRecords: true,
+      fields: ["body"],
     });
 
+    expect(seen).toEqual([
+      { fields: ["body"], fullRecords: true },
+      { fields: ["body"], fullRecords: true },
+    ]);
     expect(out.records).toHaveLength(2);
     for (const rec of out.records) {
-      const r = rec as unknown as { body: string; _meta?: unknown };
-      expect(r.body).not.toBe("[truncated]"); // hook NOT called
-      expect(r._meta).toBeUndefined();
+      const r = rec as unknown as {
+        body: string;
+        _meta?: {
+          preview?: {
+            truncated: boolean;
+            available?: string[];
+            sizes?: Record<string, number>;
+          };
+        };
+      };
+      expect(r.body).toBe("[full-redacted]");
+      expect(r._meta?.preview?.truncated).toBe(false);
+      expect(r._meta?.preview?.available).toEqual(["body"]);
+      expect(r._meta?.preview?.sizes).toEqual({ body: 15 });
+    }
+  });
+
+  it("fields: passes projection fields into previewForAgent and injects available/sizes metadata", async () => {
+    const seenFields: (readonly string[] | undefined)[] = [];
+    const source = makeFakeSource({
+      files: [FILE],
+      bytes: { [FILE.path]: BYTES },
+      previewForAgent: (record, opts) => {
+        seenFields.push(opts.fields);
+        return {
+          record: { ...record, requestedFields: opts.fields ?? [] },
+          truncated: true,
+          fullSizeBytes: 999,
+          truncatedFields: ["body"],
+          available: ["body", "headers"],
+          sizes: { body: 12, headers: 2 },
+        };
+      },
+    });
+
+    const out = await searchEvidence({
+      source,
+      parsedQuery: { source: "fake_src" } as EvidenceQuery,
+      ctx,
+      runId: "run-1",
+      runDir,
+      limit: 100,
+      cursor: null,
+      fields: ["body"],
+    });
+
+    expect(seenFields).toEqual([["body"], ["body"]]);
+    for (const rec of out.records) {
+      const r = rec as unknown as {
+        requestedFields: string[];
+        _meta: { preview: PreviewResult };
+      };
+      expect(r.requestedFields).toEqual(["body"]);
+      expect(r._meta.preview.available).toEqual(["body", "headers"]);
+      expect(r._meta.preview.sizes).toEqual({ body: 12, headers: 2 });
     }
   });
 

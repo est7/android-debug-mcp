@@ -285,9 +285,164 @@ function record(opts: {
   });
 }
 
+function navRecord(opts: {
+  tsMs: number;
+  type: string;
+  name: string;
+  host?: string;
+}): string {
+  return JSON.stringify({
+    v: 1,
+    tsMs: opts.tsMs,
+    type: opts.type,
+    name: opts.name,
+    host: opts.host,
+  });
+}
+
 const POPPO_DIR = "/sdcard/Android/data/com.baitu.poppo/files/http-logs";
+const POPPO_NAV_DIR = "/sdcard/Android/data/com.baitu.poppo/files/nav-logs";
 
 // --- tests ------------------------------------------------------------------
+
+describe("poppo_nav integration — profile search_evidence smoke", () => {
+  it("loads through the poppo-vone profile and returns preview metadata", async () => {
+    const h = await harness();
+    const { runId, sessionStartMs } = await startPoppoSession(h);
+
+    const today = new Date(sessionStartMs).toISOString().slice(0, 10);
+    const file = `${POPPO_NAV_DIR}/nav_${today}_0.jsonl`;
+    setDeviceFile(
+      file,
+      sessionStartMs + 5_000,
+      [
+        navRecord({
+          tsMs: sessionStartMs + 1_000,
+          type: "open",
+          name: "Home/Profile",
+          host: "HomepageActivity",
+        }),
+        navRecord({
+          tsMs: sessionStartMs + 2_000,
+          type: "open",
+          name: "Settings",
+          host: "SettingsActivity",
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    const r = await h.client.callTool({
+      name: "android_debug_search_evidence",
+      arguments: {
+        runId,
+        query: {
+          source: "poppo_nav",
+          nameContains: "profile",
+        },
+      },
+    });
+
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    expect(sc.warnings).toBeUndefined();
+    const records = sc.records as Array<{
+      source: string;
+      name: string;
+      host: string;
+      _meta: {
+        preview: { truncated: boolean; available: string[]; sizes: Record<string, number> };
+      };
+    }>;
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      source: "poppo_nav",
+      name: "Home/Profile",
+      host: "HomepageActivity",
+      _meta: {
+        preview: {
+          truncated: false,
+          available: [],
+          sizes: {},
+        },
+      },
+    });
+    expect((sc.statsRun as { pullsTriggered: number }).pullsTriggered).toBe(1);
+  });
+});
+
+describe("poppo-vone integration — multi-source extract_evidence_context timeline", () => {
+  it("merges poppo_http and poppo_nav records by tsMs inside the marker window", async () => {
+    const h = await harness();
+    const { runId, sessionStartMs } = await startPoppoSession(h);
+
+    const today = new Date(sessionStartMs).toISOString().slice(0, 10);
+    setDeviceFile(
+      `${POPPO_DIR}/http_${today}_0.jsonl`,
+      sessionStartMs + 5_000,
+      [
+        record({
+          tsMs: sessionStartMs + 1_000,
+          runId: "HTTP-RUN",
+          seq: 1,
+          path: "/timeline/a",
+        }),
+        record({
+          tsMs: sessionStartMs + 3_000,
+          runId: "HTTP-RUN",
+          seq: 2,
+          path: "/timeline/b",
+        }),
+        "",
+      ].join("\n"),
+    );
+    setDeviceFile(
+      `${POPPO_NAV_DIR}/nav_${today}_0.jsonl`,
+      sessionStartMs + 5_000,
+      [
+        navRecord({
+          tsMs: sessionStartMs + 2_000,
+          type: "open",
+          name: "Timeline/Nav",
+          host: "HomepageActivity",
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    const r = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(sessionStartMs + 2_000).toISOString(),
+        beforeMs: 2_000,
+        afterMs: 2_000,
+        sources: [
+          { source: "poppo_http", pathPrefix: "/timeline" },
+          { source: "poppo_nav", nameContains: "timeline" },
+        ],
+      },
+    });
+
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    const records = sc.records as Array<{
+      source: string;
+      tsMs: number;
+      path?: string;
+      name?: string;
+      _meta?: { preview?: { truncated: boolean } };
+    }>;
+    expect(records.map((x) => [x.source, x.tsMs, x.path ?? x.name])).toEqual([
+      ["poppo_http", sessionStartMs + 1_000, "/timeline/a"],
+      ["poppo_nav", sessionStartMs + 2_000, "Timeline/Nav"],
+      ["poppo_http", sessionStartMs + 3_000, "/timeline/b"],
+    ]);
+    expect(records.every((r) => r._meta?.preview?.truncated === false)).toBe(true);
+    expect(sc.nextCursor).toBeUndefined();
+    expect((sc.statsRun as { pullsTriggered: number }).pullsTriggered).toBe(2);
+  });
+});
 
 describe("poppo_http integration — R1 session scoping", () => {
   it("warns when a poppo_http query has no tsMsRange and is therefore not session-scoped", async () => {

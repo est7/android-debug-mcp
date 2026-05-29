@@ -168,6 +168,96 @@ const fakeSource: EvidenceSource = {
 
 const fakeProfile: Profile = { name: TEST_PROFILE_NAME, evidenceSources: [fakeSource] };
 
+interface TimelineRecord {
+  readonly source: "timeline_http" | "timeline_nav";
+  readonly tsMs: number;
+  readonly label: string;
+}
+
+const MULTI_PROFILE_NAME = "test-multi-source-profile";
+
+function timelineSource(
+  id: TimelineRecord["source"],
+  devicePath: string,
+  bytes: string,
+): EvidenceSource {
+  return {
+    id,
+    querySchema: z
+      .object({
+        source: z.literal(id),
+        labelPrefix: z.string().optional(),
+        tsMsRange: z
+          .object({
+            from: z.number().int(),
+            to: z.number().int(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict(),
+    async listDeviceFiles(_ctx: EvidenceContext) {
+      return [{ path: devicePath, name: `${id}.jsonl`, mtimeMs: 100 }];
+    },
+    async pullFile(_ctx, _deviceFile, localPath) {
+      await mkdir(join(localPath, ".."), { recursive: true });
+      await writeFile(localPath, bytes, "utf8");
+    },
+    parseLine(line) {
+      const parts = line.split("|");
+      if (parts.length !== 2) return null;
+      const tsMs = Number.parseInt(parts[0] as string, 10);
+      if (!Number.isFinite(tsMs)) return null;
+      return { source: id, tsMs, label: parts[1] as string } satisfies TimelineRecord;
+    },
+    matchQuery(record, query) {
+      const r = record as unknown as TimelineRecord;
+      const q = query as { labelPrefix?: string; tsMsRange?: { from: number; to: number } };
+      if (q.labelPrefix !== undefined && !r.label.startsWith(q.labelPrefix)) return false;
+      if (q.tsMsRange !== undefined) {
+        if (r.tsMs < q.tsMsRange.from) return false;
+        if (r.tsMs > q.tsMsRange.to) return false;
+      }
+      return true;
+    },
+    redactForBundle(record) {
+      return record;
+    },
+    previewForAgent(record) {
+      return {
+        record,
+        truncated: false,
+        fullSizeBytes: Buffer.byteLength(JSON.stringify(record), "utf8"),
+        truncatedFields: [],
+        available: [],
+        sizes: {},
+      };
+    },
+  };
+}
+
+const multiProfile: Profile = {
+  name: MULTI_PROFILE_NAME,
+  evidenceSources: [
+    timelineSource(
+      "timeline_http",
+      "/d/timeline_http.jsonl",
+      [
+        "1716600000400|out-before",
+        "1716600000500|http-a",
+        "1716600000700|http-b",
+        "1716600001001|out-after",
+        "",
+      ].join("\n"),
+    ),
+    timelineSource(
+      "timeline_nav",
+      "/d/timeline_nav.jsonl",
+      ["1716600000600|nav-a", "1716600000800|nav-b", ""].join("\n"),
+    ),
+  ],
+};
+
 // --- harness ------------------------------------------------------------------
 
 interface Harness {
@@ -220,9 +310,11 @@ beforeEach(() => {
   process.env.ANDROID_DEBUG_MCP_RUN_ROOT = scratch;
   resetPathsCache();
   registerTestProfile(fakeProfile);
+  registerTestProfile(multiProfile);
 });
 afterEach(async () => {
   for (const h of open.splice(0)) await h.shutdown();
+  unregisterTestProfile(MULTI_PROFILE_NAME);
   unregisterTestProfile(TEST_PROFILE_NAME);
   vi.restoreAllMocks();
   // biome-ignore lint/performance/noDelete: must unset, not set to "undefined".
@@ -389,6 +481,84 @@ describe("search_evidence — cursor integrity", () => {
 });
 
 describe("extract_evidence_context", () => {
+  it("rejects calls that provide both query and sources as query_malformed", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h, { withProfile: true });
+    const r = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(1716600000500).toISOString(),
+        query: { source: "fake_src" },
+        sources: [{ source: "fake_src" }],
+      },
+    });
+    expect(r.isError).toBe(true);
+    const err = JSON.parse(callText(r)) as { error: string; message: string };
+    expect(err.error).toBe("query_malformed");
+    expect(err.message).toContain("query and sources are mutually exclusive");
+  });
+
+  it("rejects calls that provide neither query nor sources as query_malformed", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h, { withProfile: true });
+    const r = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(1716600000500).toISOString(),
+      },
+    });
+    expect(r.isError).toBe(true);
+    const err = JSON.parse(callText(r)) as { error: string; message: string };
+    expect(err.error).toBe("query_malformed");
+    expect(err.message).toContain("one of query or sources is required");
+  });
+
+  it("multi-source mode injects the marker window into each source, merges by tsMs, truncates after limit, and warns", async () => {
+    const h = await harness();
+    writeProfileJson(h.projectRoot, MULTI_PROFILE_NAME);
+    const { runId } = await startRun(h);
+
+    const r = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(1716600000750).toISOString(),
+        beforeMs: 250,
+        afterMs: 250,
+        sources: [{ source: "timeline_http" }, { source: "timeline_nav" }],
+        limit: 3,
+      },
+    });
+
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    expect(sc.tsMsRange).toEqual({ from: 1716600000500, to: 1716600001000 });
+    expect(sc.nextCursor).toBeUndefined();
+    expect(sc.warnings).toEqual(["multi-source truncated at limit; narrow ts/sources"]);
+    expect(sc.statsRun).toMatchObject({
+      filesScanned: 2,
+      recordsScanned: 6,
+      pullsTriggered: 2,
+    });
+    const records = sc.records as Array<{
+      source: string;
+      tsMs: number;
+      label: string;
+      _meta?: {
+        preview?: { truncated: boolean; available?: string[]; sizes?: Record<string, number> };
+      };
+    }>;
+    expect(records.map((r) => [r.source, r.tsMs, r.label])).toEqual([
+      ["timeline_http", 1716600000500, "http-a"],
+      ["timeline_nav", 1716600000600, "nav-a"],
+      ["timeline_http", 1716600000700, "http-b"],
+    ]);
+    expect(records.every((r) => r._meta?.preview?.truncated === false)).toBe(true);
+    expect(records.every((r) => r._meta?.preview?.available?.length === 0)).toBe(true);
+  });
+
   it("injects tsMsRange from markerIsoTs + before/afterMs and echoes it back", async () => {
     const h = await harness();
     const { runId } = await startRun(h, { withProfile: true });
@@ -534,13 +704,19 @@ const PREVIEW_PROFILE_NAME = "test-fake-preview-profile";
 
 const fakeSourceWithPreview: EvidenceSource = {
   ...fakeSource,
-  previewForAgent(record) {
+  previewForAgent(record, opts) {
     const r = record as unknown as FakeRecord;
     return {
-      record: { ...r, path: "[preview]" } as unknown as ParsedRecord,
-      truncated: true,
+      record: {
+        ...r,
+        path: opts.fullRecords === true ? "[full-redacted]" : "[preview]",
+        fieldEcho: opts.fields ?? [],
+      } as unknown as ParsedRecord,
+      truncated: opts.fullRecords !== true,
       fullSizeBytes: 9999,
-      truncatedFields: ["path"],
+      truncatedFields: opts.fullRecords === true ? [] : ["path"],
+      available: ["path"],
+      sizes: { path: Buffer.byteLength(JSON.stringify(r.path), "utf8") },
     };
   },
 };
@@ -584,7 +760,7 @@ describe("v2-G.1 Phase 3 — fullRecords + reject path", () => {
     }
   });
 
-  it("search_evidence fullRecords:true: records do NOT carry _meta (preview skipped)", async () => {
+  it("search_evidence fullRecords:true: records still go through preview hook and carry metadata", async () => {
     const h = await harness();
     const { runId } = await startRun(h);
     writeProfileJson(h.projectRoot, PREVIEW_PROFILE_NAME);
@@ -606,11 +782,18 @@ describe("v2-G.1 Phase 3 — fullRecords + reject path", () => {
     });
     expect(out.isError).toBeFalsy();
     const sc = structured(out);
-    const records = sc.records as Array<{ path: string; _meta?: unknown }>;
+    const records = sc.records as Array<{
+      path: string;
+      _meta?: {
+        preview?: { truncated: boolean; available?: string[]; sizes?: Record<string, number> };
+      };
+    }>;
     expect(records.length).toBeGreaterThan(0);
     for (const rec of records) {
-      expect(rec._meta).toBeUndefined();
-      expect(rec.path).not.toBe("[preview]"); // hook NOT called
+      expect(rec.path).toBe("[full-redacted]");
+      expect(rec._meta?.preview?.truncated).toBe(false);
+      expect(rec._meta?.preview?.available).toEqual(["path"]);
+      expect(rec._meta?.preview?.sizes?.path).toBeGreaterThan(0);
     }
   });
 
@@ -648,7 +831,7 @@ describe("v2-G.1 Phase 3 — fullRecords + reject path", () => {
     expect(callText(out)).toMatch(/fullRecords:true requires limit <= 10/);
   });
 
-  it("extract_evidence_context fullRecords:true: records do NOT carry _meta (symmetric with search_evidence)", async () => {
+  it("extract_evidence_context fullRecords:true: records still go through preview hook", async () => {
     const h = await harness();
     const { runId } = await startRun(h);
     writeProfileJson(h.projectRoot, PREVIEW_PROFILE_NAME);
@@ -673,11 +856,14 @@ describe("v2-G.1 Phase 3 — fullRecords + reject path", () => {
     });
     expect(out.isError).toBeFalsy();
     const sc = structured(out);
-    const records = sc.records as Array<{ path: string; _meta?: unknown }>;
+    const records = sc.records as Array<{
+      path: string;
+      _meta?: { preview?: { truncated: boolean } };
+    }>;
     expect(records.length).toBeGreaterThan(0);
     for (const rec of records) {
-      expect(rec._meta).toBeUndefined();
-      expect(rec.path).not.toBe("[preview]");
+      expect(rec.path).toBe("[full-redacted]");
+      expect(rec._meta?.preview?.truncated).toBe(false);
     }
   });
 
@@ -758,6 +944,38 @@ describe("v2-G.1 Phase 3 — fullRecords + reject path", () => {
       truncatedFullBytesSum: 0,
       savedBytesSum: 0,
     });
+  });
+
+  it("search_evidence fields: forwards projection fields and returns available/sizes metadata", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    writeProfileJson(h.projectRoot, PREVIEW_PROFILE_NAME);
+    await h.client.callTool({ name: "android_debug_stop_session", arguments: { runId } });
+    const r2 = await h.client.callTool({
+      name: "android_debug_start_session",
+      arguments: { packageName: "com.example.v2g_evidence", projectRoot: h.projectRoot },
+    });
+    const newRunId = (structured(r2).runId as string) ?? "";
+
+    const out = await h.client.callTool({
+      name: "android_debug_search_evidence",
+      arguments: {
+        runId: newRunId,
+        query: { source: "fake_src", pathPrefix: "/api" },
+        fields: ["path"],
+      },
+    });
+    expect(out.isError).toBeFalsy();
+    const records = structured(out).records as Array<{
+      fieldEcho: string[];
+      _meta?: { preview?: { available?: string[]; sizes?: Record<string, number> } };
+    }>;
+    expect(records.length).toBeGreaterThan(0);
+    for (const rec of records) {
+      expect(rec.fieldEcho).toEqual(["path"]);
+      expect(rec._meta?.preview?.available).toEqual(["path"]);
+      expect(rec._meta?.preview?.sizes?.path).toBeGreaterThan(0);
+    }
   });
 
   it("commands.jsonl audit row: fullRecords:true → sums all 0", async () => {
@@ -877,6 +1095,36 @@ describe("v2-G.1 Phase 3 — fullRecords + reject path", () => {
       expect(rec._meta?.preview?.truncated).toBe(true);
       expect(rec._meta?.preview?.fullSizeBytes).toBe(9999);
       expect(rec._meta?.preview?.truncatedFields).toEqual(["path"]);
+    }
+  });
+
+  it("extract_evidence_context fields: forwards projection fields to searchEvidence", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    writeProfileJson(h.projectRoot, PREVIEW_PROFILE_NAME);
+    await h.client.callTool({ name: "android_debug_stop_session", arguments: { runId } });
+    const r2 = await h.client.callTool({
+      name: "android_debug_start_session",
+      arguments: { packageName: "com.example.v2g_evidence", projectRoot: h.projectRoot },
+    });
+    const newRunId = (structured(r2).runId as string) ?? "";
+
+    const out = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId: newRunId,
+        markerIsoTs: new Date(1_716_600_000_500).toISOString(),
+        beforeMs: 1000,
+        afterMs: 2000,
+        query: { source: "fake_src" },
+        fields: ["path"],
+      },
+    });
+    expect(out.isError).toBeFalsy();
+    const records = structured(out).records as Array<{ fieldEcho: string[] }>;
+    expect(records.length).toBeGreaterThan(0);
+    for (const rec of records) {
+      expect(rec.fieldEcho).toEqual(["path"]);
     }
   });
 

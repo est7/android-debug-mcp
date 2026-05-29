@@ -1,66 +1,22 @@
-import type { ParsedRecord, PreviewResult } from "../../types.ts";
+import type { ParsedRecord, PreviewOpts, PreviewResult } from "../../types.ts";
+import { derivePoppoHttpOutcome } from "./match.ts";
 import type { PoppoHttpRecord } from "./record.ts";
-import { redactPoppoHttpRecord } from "./redact.ts";
-
-/**
- * v2-G.1 Block B — agent-facing record preview for poppo_http records.
- *
- * Producer-side records can be huge: a single `lang.json` response captured
- * by `CustomHttpLoggingInterceptor` measures ~622 KB on real Poppo data
- * (≈ 155k tokens by OpenAI-style estimation). Default `search_evidence` /
- * `extract_evidence_context` runs records through this projection before
- * emitting; agents that want the raw record pay explicitly via
- * `fullRecords: true`.
- *
- * # Hotspot scope (lock § Q4)
- *
- * Two fields drive ~90% of record byte volume:
- *
- *   1. `body.text` — the response/request body as decoded text. Truncated
- *      when present AND its real-byte length exceeds `THRESHOLD_BODY_TEXT_BYTES`.
- *   2. `body.decoded` — the body parsed-as-JSON convenience object the
- *      producer sometimes attaches. Truncated when present AND its
- *      `JSON.stringify` size exceeds `THRESHOLD_BODY_DECODED_BYTES`.
- *
- * Both `request.body` and `response.body` go through the same rules — Poppo
- * sometimes pushes huge multipart uploads inbound, and i18n responses are
- * huge outbound. Other fields (`error`, `app`, `headers`, `params`, etc.)
- * are small and pass through unchanged.
- *
- * # Truncation form
- *
- *   - `body.text` → first 1024 chars + ` …<truncated N bytes>` suffix.
- *     `textBytes` keeps its original value so agents can compute compression.
- *   - `body.decoded` → `{ __truncated: true, headChars, fullBytes }`. Loses
- *     the JSON tree but keeps the head string for parse-error inspection.
- *
- * # `fullSizeBytes` calculation
- *
- * Raw `JSON.stringify(record)` UTF-8 byte length. Bun's `Buffer.byteLength`
- * is the cheapest measurement on V8/JavaScriptCore — single pass over the
- * string. For a 622 KB record this is sub-5ms on a warm JIT (Phase 4
- * acceptance to verify against real fixture).
- *
- * # Schema invariants this respects
- *
- * The producer record schema (rev4 `submodulepoppo/docs/projects/...`)
- * carries three body invariants enforced at parse time:
- *
- *   I1. `text != null` ⟺ `textBytes != null` ⟺ `omittedReason == null`
- *   I2. `preview != null` ⟹ `omittedReason == "oversize"`
- *   I3. `preview != null` ⟺ `previewBytes != null`
- *
- * This preview function MUST NOT break I1 — when we truncate `text`, both
- * `text` and `textBytes` stay non-null and `omittedReason` stays null. I2/I3
- * are about producer-side oversize markers (`preview`/`previewBytes`/
- * `omittedReason == "oversize"`), independent of agent-side preview.
- * Touching them would conflate two different "preview" concepts; we leave
- * them alone.
- */
+import { REDACTED_PLACEHOLDER, redactPoppoHttpRecord } from "./redact.ts";
 
 const THRESHOLD_BODY_TEXT_BYTES = 2048;
 const THRESHOLD_BODY_DECODED_BYTES = 2048;
 const HEAD_CHAR_LIMIT = 1024;
+
+const POPPO_HTTP_SECTIONS = [
+  "request.headers",
+  "request.params",
+  "request.body",
+  "request.decoded",
+  "response.headers",
+  "response.body",
+] as const;
+
+type PoppoHttpSection = (typeof POPPO_HTTP_SECTIONS)[number];
 
 interface PoppoBody {
   readonly contentType: string | null;
@@ -70,22 +26,6 @@ interface PoppoBody {
   readonly omittedReason: string | null;
   readonly preview: string | null;
   readonly previewBytes: number | null;
-  readonly [key: string]: unknown;
-}
-
-interface PoppoRequest {
-  readonly headers: unknown;
-  readonly params: unknown;
-  readonly decoded: unknown;
-  readonly body: PoppoBody;
-  readonly [key: string]: unknown;
-}
-
-interface PoppoResponse {
-  readonly status: number;
-  readonly headers: unknown;
-  readonly body: PoppoBody;
-  readonly app: unknown;
   readonly [key: string]: unknown;
 }
 
@@ -112,133 +52,216 @@ function truncateDecoded(decoded: unknown): TruncatedDecodedMarker | unknown {
   } satisfies TruncatedDecodedMarker;
 }
 
-/**
- * Project one body. Returns the (possibly identical) body + the list of
- * dotted field paths it mutated, scoped by `pathPrefix` ("request.body" or
- * "response.body").
- */
 function previewBody(
   body: PoppoBody,
   pathPrefix: "request.body" | "response.body",
 ): { readonly body: PoppoBody; readonly truncatedFields: readonly string[] } {
-  const mutated: string[] = [];
+  const truncatedFields: string[] = [];
   let next: PoppoBody = body;
 
   if (body.text !== null && body.textBytes !== null && body.textBytes > THRESHOLD_BODY_TEXT_BYTES) {
     next = { ...next, text: truncateText(body.text, body.textBytes) };
-    mutated.push(`${pathPrefix}.text`);
+    truncatedFields.push(`${pathPrefix}.text`);
   }
 
-  return { body: next, truncatedFields: mutated };
-}
-
-/**
- * Project one request envelope. Currently scopes to `request.body` (text +
- * decoded) per Q4 — request `decoded` is rare in Poppo but possible (POST
- * with JSON content-type).
- */
-function previewRequest(req: PoppoRequest): {
-  readonly request: PoppoRequest;
-  readonly truncatedFields: readonly string[];
-} {
-  const mutated: string[] = [];
-  let next: PoppoRequest = req;
-
-  const bodyResult = previewBody(req.body, "request.body");
-  if (bodyResult.truncatedFields.length > 0) {
-    next = { ...next, body: bodyResult.body };
-    mutated.push(...bodyResult.truncatedFields);
-  }
-
-  if (req.decoded !== null && req.decoded !== undefined) {
-    const decodedPreview = truncateDecoded(req.decoded);
-    if (decodedPreview !== req.decoded) {
-      next = { ...next, decoded: decodedPreview };
-      mutated.push("request.decoded");
-    }
-  }
-
-  return { request: next, truncatedFields: mutated };
-}
-
-/** Project one response envelope. Scopes to `response.body.text` +
- * `response.body.decoded` per Q4. */
-function previewResponse(resp: PoppoResponse): {
-  readonly response: PoppoResponse;
-  readonly truncatedFields: readonly string[];
-} {
-  const mutated: string[] = [];
-  let next: PoppoResponse = resp;
-
-  const bodyResult = previewBody(resp.body, "response.body");
-  if (bodyResult.truncatedFields.length > 0) {
-    next = { ...next, body: bodyResult.body };
-    mutated.push(...bodyResult.truncatedFields);
-  }
-
-  // `response.body.decoded` is the producer's optional JSON parse of the
-  // wire body. Truncate when oversize; preserve when small or null.
-  const decoded = resp.body.decoded as unknown;
+  const decoded = body.decoded;
   if (decoded !== null && decoded !== undefined) {
     const decodedPreview = truncateDecoded(decoded);
     if (decodedPreview !== decoded) {
-      next = { ...next, body: { ...next.body, decoded: decodedPreview } };
-      mutated.push("response.body.decoded");
+      next = { ...next, decoded: decodedPreview };
+      truncatedFields.push(`${pathPrefix}.decoded`);
     }
   }
 
-  return { response: next, truncatedFields: mutated };
+  return { body: next, truncatedFields };
+}
+
+function digestRecord(record: PoppoHttpRecord): ParsedRecord {
+  const app = record.response?.app;
+  return {
+    source: "poppo_http",
+    tsMs: record.tsMs,
+    runId: record.runId,
+    seq: record.seq,
+    method: record.method,
+    path: record.path,
+    host: record.host,
+    status: record.response?.status ?? null,
+    durationMs: record.durationMs,
+    outcome: derivePoppoHttpOutcome(record),
+    heartBeat: record.heartBeat,
+    app:
+      app === null || app === undefined
+        ? null
+        : {
+            ok: app.ok,
+            code: app.code,
+            message: app.message,
+          },
+  };
+}
+
+function hasBodyContent(body: PoppoBody): boolean {
+  return body.text !== null || body.preview !== null || body.decoded !== undefined;
+}
+
+function isSection(section: string): section is PoppoHttpSection {
+  return (POPPO_HTTP_SECTIONS as readonly string[]).includes(section);
+}
+
+function sectionValue(record: PoppoHttpRecord, section: PoppoHttpSection): unknown {
+  switch (section) {
+    case "request.headers":
+      return record.request.headers;
+    case "request.params":
+      return record.request.params;
+    case "request.body":
+      return record.request.body;
+    case "request.decoded":
+      return record.request.decoded;
+    case "response.headers":
+      return record.response?.headers;
+    case "response.body":
+      return record.response?.body;
+  }
+}
+
+function availableSections(record: PoppoHttpRecord): readonly PoppoHttpSection[] {
+  const out: PoppoHttpSection[] = ["request.headers", "request.params"];
+  if (hasBodyContent(record.request.body as PoppoBody)) out.push("request.body");
+  if (record.request.decoded !== null) out.push("request.decoded");
+  if (record.response !== null) {
+    out.push("response.headers", "response.body");
+  }
+  return out;
+}
+
+function sectionSizes(
+  record: PoppoHttpRecord,
+  available: readonly PoppoHttpSection[],
+): Readonly<Record<string, number>> {
+  const out: Record<string, number> = {};
+  for (const section of available) {
+    out[section] = Buffer.byteLength(JSON.stringify(sectionValue(record, section)), "utf8");
+  }
+  return out;
+}
+
+function withSection(
+  record: ParsedRecord,
+  section: PoppoHttpSection,
+  value: unknown,
+): ParsedRecord {
+  switch (section) {
+    case "request.headers":
+      return { ...record, request: { ...(record.request as object | undefined), headers: value } };
+    case "request.params":
+      return { ...record, request: { ...(record.request as object | undefined), params: value } };
+    case "request.body":
+      return { ...record, request: { ...(record.request as object | undefined), body: value } };
+    case "request.decoded":
+      return { ...record, request: { ...(record.request as object | undefined), decoded: value } };
+    case "response.headers":
+      return {
+        ...record,
+        response: { ...(record.response as object | undefined), headers: value },
+      };
+    case "response.body":
+      return { ...record, response: { ...(record.response as object | undefined), body: value } };
+  }
 }
 
 function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function redactedFieldPaths(raw: PoppoHttpRecord, redacted: PoppoHttpRecord): string[] {
-  const fields: string[] = [];
-  if (raw.url !== redacted.url) fields.push("url");
-  if (!sameJson(raw.request.headers, redacted.request.headers)) fields.push("request.headers");
-  if (!sameJson(raw.request.params, redacted.request.params)) fields.push("request.params");
+function sectionRedactedFields(raw: PoppoHttpRecord, redacted: PoppoHttpRecord): readonly string[] {
+  const fields = new Set<string>();
+  if (raw.url !== redacted.url) fields.add("url");
+  if (!sameJson(raw.request.headers, redacted.request.headers)) fields.add("request.headers");
+  if (!sameJson(raw.request.params, redacted.request.params)) fields.add("request.params");
+  if (!sameJson(raw.request.decoded, redacted.request.decoded)) fields.add("request.decoded");
   if (raw.response !== null && redacted.response !== null) {
     if (!sameJson(raw.response.headers, redacted.response.headers)) {
-      fields.push("response.headers");
+      fields.add("response.headers");
     }
   }
-  return fields;
+  return [...fields];
 }
 
-export function previewPoppoHttpRecord(record: ParsedRecord): PreviewResult {
-  const r = record as PoppoHttpRecord;
+function filterRedactedFields(
+  fields: readonly string[],
+  sections: readonly PoppoHttpSection[],
+): readonly string[] {
+  return fields.filter((field) =>
+    sections.some((section) => field === section || field.startsWith(`${section}.`)),
+  );
+}
 
-  // `fullSizeBytes` is measured on the ORIGINAL record so agents can decide
-  // whether to re-fetch with `fullRecords:true`. Bun's `Buffer.byteLength`
-  // is single-pass utf8 length.
-  const fullSizeBytes = Buffer.byteLength(JSON.stringify(r), "utf8");
+function projectBodySection(
+  record: PoppoHttpRecord,
+  section: "request.body" | "response.body",
+): { readonly value: unknown; readonly truncatedFields: readonly string[] } {
+  if (section === "request.body") {
+    const result = previewBody(record.request.body as PoppoBody, section);
+    return { value: result.body, truncatedFields: result.truncatedFields };
+  }
+  if (record.response === null) {
+    return { value: undefined, truncatedFields: [] };
+  }
+  const result = previewBody(record.response.body as PoppoBody, section);
+  return { value: result.body, truncatedFields: result.truncatedFields };
+}
 
+export function previewPoppoHttpRecord(
+  record: ParsedRecord,
+  opts: PreviewOpts = {},
+): PreviewResult {
+  const raw = record as PoppoHttpRecord;
+  const fullSizeBytes = Buffer.byteLength(JSON.stringify(raw), "utf8");
+  const redacted = redactPoppoHttpRecord(raw);
+  const available = availableSections(redacted);
+  const sizes = sectionSizes(redacted, available);
+  const allRedactedFields = sectionRedactedFields(raw, redacted);
+
+  if (opts.fullRecords === true) {
+    return {
+      record: redacted as unknown as ParsedRecord,
+      truncated: false,
+      fullSizeBytes,
+      truncatedFields: [],
+      ...(allRedactedFields.length > 0 ? { redactedFields: allRedactedFields } : {}),
+      available,
+      sizes,
+    };
+  }
+
+  const selected = new Set((opts.fields ?? []).filter(isSection));
+  let out = digestRecord(redacted);
   const truncatedFields: string[] = [];
-  const redacted = redactPoppoHttpRecord(r);
-  const redactedFields = redactedFieldPaths(r, redacted);
-  let next: PoppoHttpRecord = redacted;
 
-  const reqResult = previewRequest(redacted.request as unknown as PoppoRequest);
-  if (reqResult.truncatedFields.length > 0) {
-    next = { ...next, request: reqResult.request as unknown as PoppoHttpRecord["request"] };
-    truncatedFields.push(...reqResult.truncatedFields);
-  }
-
-  if (redacted.response !== null) {
-    const respResult = previewResponse(redacted.response as unknown as PoppoResponse);
-    if (respResult.truncatedFields.length > 0) {
-      next = { ...next, response: respResult.response as unknown as PoppoHttpRecord["response"] };
-      truncatedFields.push(...respResult.truncatedFields);
+  for (const section of available) {
+    if (!selected.has(section)) continue;
+    if (section === "request.body" || section === "response.body") {
+      const projected = projectBodySection(redacted, section);
+      if (projected.value !== undefined) {
+        out = withSection(out, section, projected.value);
+        truncatedFields.push(...projected.truncatedFields);
+      }
+      continue;
     }
+    out = withSection(out, section, sectionValue(redacted, section));
   }
+
+  const redactedFields = filterRedactedFields(allRedactedFields, [...selected]);
 
   return {
-    record: next as unknown as ParsedRecord,
+    record: out,
     truncated: truncatedFields.length > 0,
     fullSizeBytes,
     truncatedFields,
     ...(redactedFields.length > 0 ? { redactedFields } : {}),
+    available,
+    sizes,
   };
 }

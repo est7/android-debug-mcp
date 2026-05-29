@@ -6,6 +6,7 @@ import type {
   EvidenceQuery,
   EvidenceSource,
   ParsedRecord,
+  PreviewOpts,
 } from "../profile/types.ts";
 import { compareSortKeys, decodeCursor, encodeCursor } from "./cursor.ts";
 import {
@@ -58,12 +59,12 @@ export interface SearchEvidenceInput {
   readonly limit: number;
   readonly cursor: string | null;
   readonly mode?: EvidenceRuntimeMode;
+  /** Passed into `previewForAgent` so sources can expose opt-in sections. */
+  readonly fields?: readonly string[];
   /**
-   * v2-G.1 Block B (Phase 3 tool boundary adds this; Phase 1 lands the
-   * runtime plumbing). When `true`, the post-page transform skips the
-   * `previewForAgent` projection and returns raw records. The pre-projection
-   * `_meta` reservation invariant still fires regardless — `fullRecords:true`
-   * is not a bypass for that. Default `false`.
+   * Passed into `previewForAgent`. For hook-backed sources this means "all
+   * sections, no body truncation, but still source-redacted"; no-hook sources
+   * remain raw passthrough.
    */
   readonly fullRecords?: boolean;
 }
@@ -162,7 +163,10 @@ async function runStreamPath(
           lineOffset: iter.next.lineOffset,
         });
 
-  const records = applyPostPageTransform(iter.records, input.source, input.fullRecords ?? false);
+  const records = applyPostPageTransform(iter.records, input.source, {
+    ...(input.fields !== undefined ? { fields: input.fields } : {}),
+    fullRecords: input.fullRecords ?? false,
+  });
 
   return {
     records,
@@ -260,7 +264,10 @@ async function runSortPath(
         })
       : null;
 
-  const records = applyPostPageTransform(pageRecords, input.source, input.fullRecords ?? false);
+  const records = applyPostPageTransform(pageRecords, input.source, {
+    ...(input.fields !== undefined ? { fields: input.fields } : {}),
+    fullRecords: input.fullRecords ?? false,
+  });
 
   return {
     records,
@@ -413,13 +420,11 @@ async function iterateLocal(input: IterateInput): Promise<IterateOutput> {
  *      and regardless of the caller's `fullRecords` opt-in; neither path
  *      may bypass the reservation.
  *
- *   2. **Projection (Q5b post-page transform).** If the source declared
- *      `previewForAgent?` AND the caller did NOT set `fullRecords:true`,
- *      every page record is run through the hook and wrapped as
- *      `{ ...result.record, _meta: { preview: {...} } }`. Otherwise the
- *      raw records pass through unchanged (no `_meta` injection — agents
- *      read absence as "this source does not support preview" or
- *      "fullRecords was opted into").
+ *   2. **Projection (Q5b post-page transform + v2-H H1).** If the source
+ *      declared `previewForAgent?`, every page record is run through the
+ *      hook with `{fields, fullRecords}` and wrapped as
+ *      `{ ...result.record, _meta: { preview: {...} } }`. No-hook sources
+ *      pass through unchanged.
  *
  * Pure: no I/O. The invariants in Q5b (#1-#5) guarantee this transform does
  * not affect `matchQuery` / `sortKey` / cursor encoding / `recordsScanned` /
@@ -433,19 +438,19 @@ async function iterateLocal(input: IterateInput): Promise<IterateOutput> {
 export function applyPostPageTransform(
   pageRecords: readonly ParsedRecord[],
   source: EvidenceSource,
-  fullRecords: boolean,
+  opts: PreviewOpts,
 ): readonly ParsedRecord[] {
   for (const r of pageRecords) {
     assertNoReservedMeta(r, source.id);
   }
 
-  if (source.previewForAgent === undefined || fullRecords) {
+  if (source.previewForAgent === undefined) {
     return pageRecords;
   }
 
   const previewHook = source.previewForAgent.bind(source);
   return pageRecords.map((r) => {
-    const result = previewHook(r);
+    const result = previewHook(r, opts);
     // `PreviewResult.record` is a `ParsedRecord`, so the global `_meta`
     // reservation applies here too — a hook that returns `{...record,
     // _meta:{...}}` would otherwise see its key silently overwritten by
@@ -462,6 +467,8 @@ export function applyPostPageTransform(
           ...(result.redactedFields !== undefined && result.redactedFields.length > 0
             ? { redactedFields: result.redactedFields }
             : {}),
+          ...(result.available !== undefined ? { available: result.available } : {}),
+          ...(result.sizes !== undefined ? { sizes: result.sizes } : {}),
         },
       },
     } as ParsedRecord;

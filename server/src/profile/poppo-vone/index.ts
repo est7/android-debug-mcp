@@ -1,5 +1,6 @@
 import type { Profile } from "../types.ts";
 import { poppoHttpSource } from "./poppo_http/source.ts";
+import { poppoNavSource } from "./poppo_nav/source.ts";
 
 /**
  * `poppo-vone` profile —— v2-G's first reference profile.
@@ -19,5 +20,5 @@ import { poppoHttpSource } from "./poppo_http/source.ts";
  */
 export const POPPO_VONE_PROFILE: Profile = {
   name: "poppo-vone",
-  evidenceSources: [poppoHttpSource],
+  evidenceSources: [poppoHttpSource, poppoNavSource],
 };

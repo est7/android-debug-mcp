@@ -26,19 +26,18 @@ import type { PoppoHttpRecord } from "./record.ts";
  *    ends up URL-encoded (`%5BREDACTED%5D`) per codex Phase 4 audit #5 —
  *    keeps the redacted URL a valid URL.
  *
- * # What's NOT redacted (Q6: "其他全 raw")
+ * 4. **request.decoded** — recursively traversed; object keys matching the
+ *    query-param sensitive-name set (`imei`, `oaid`, `smei_id`, `_uid`,
+ *    `uuid`, `appsflyer_id`, etc.) have their value replaced wholesale.
+ *
+ * # What's NOT redacted
  *
  *   - request/response body `text`, `preview`
- *   - request `decoded` (decrypted signature payload — may contain
- *     business secrets, but Q6 MVP leaves it)
  *   - response `app` envelope
  *   - error type/message/phase
- *
- * Expanding this list (esp. body text + decoded) is a Phase 5 / v2-G.1
- * decision — don't drift it here unilaterally.
  */
 
-const SENSITIVE_HEADER_NAMES_LC = new Set([
+export const SENSITIVE_HEADER_NAMES_LC = new Set([
   "authorization",
   "cookie",
   "set-cookie",
@@ -46,7 +45,7 @@ const SENSITIVE_HEADER_NAMES_LC = new Set([
   "proxy-authorization",
 ]);
 
-const SENSITIVE_QUERY_NAMES_LC = new Set([
+export const SENSITIVE_QUERY_NAMES_LC = new Set([
   "_sign",
   "_random",
   "_uid",
@@ -61,7 +60,7 @@ const SENSITIVE_QUERY_NAMES_LC = new Set([
 ]);
 
 /** Raw placeholder used in header values. URL field uses the URL-encoded form. */
-const REDACTED_PLACEHOLDER = "[REDACTED]";
+export const REDACTED_PLACEHOLDER = "[REDACTED]";
 
 interface NameValue {
   readonly name: string;
@@ -85,6 +84,27 @@ function redactQueryParams(params: readonly NameValue[]): NameValue[] {
     }
     return p;
   });
+}
+
+function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function redactDecodedValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactDecodedValue(entry));
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    out[key] = SENSITIVE_QUERY_NAMES_LC.has(key.toLowerCase())
+      ? REDACTED_PLACEHOLDER
+      : redactDecodedValue(entry);
+  }
+  return out;
 }
 
 /**
@@ -120,6 +140,7 @@ export function redactPoppoHttpRecord(record: PoppoHttpRecord): PoppoHttpRecord 
     ...record.request,
     headers: redactHeaders(record.request.headers),
     params: redactQueryParams(record.request.params),
+    decoded: redactDecodedValue(record.request.decoded),
   };
 
   const redactedResponse =
