@@ -24,6 +24,7 @@
 | [`audits/tool-ux-e2e-2026-05-28-codex.md`](./audits/tool-ux-e2e-2026-05-28-codex.md) | 真机 e2e tool UX/contract 走查: session-scoped evidence、默认输出噪声、redaction/bundle、错误可恢复性、HomepageActivity API 物证 | 2026-05-28 |
 | [`v2/v2-h-implementation-plan.md`](./v2/v2-h-implementation-plan.md) | v2-H 实施计划(evidence digest/fields 投影 + decoded 脱敏 Blocker + `fullRecords` 收紧 + `poppo_nav` source + 多源时间线 + nav producer;5 phase,grill 定稿,交 codex 执行) | locked 2026-05-29 |
 | [`v2/v2-i-implementation-plan.md`](./v2/v2-i-implementation-plan.md) | v2-I 实施计划(统一时间线:把 logcat + events 并入 `extract_evidence_context.sources`,含 logcat `tsRaw`→epoch 换算器;一步推进 B 崩溃三角 + D 交互因果;3 phase,grill 选项 α) | locked 2026-05-29 |
+| [`v2/v2-j-implementation-plan.md`](./v2/v2-j-implementation-plan.md) | v2-J 实施计划(性能快照轴 C:新增 `android_debug_perf_snapshot`,host-side `dumpsys gfxinfo` + `meminfo`,默认 digest,`raw:true` opt-in,`reset:true` 支持 reset→act→read) | locked 2026-05-29 |
 | `architecture.md` | 系统架构图、session 生命周期、数据流 | v1.1(未建立) |
 | [`test-plan.md`](./test-plan.md) | 5 scenario 真机 manual checklist | Phase 11 落盘 |
 | [`audits/`](./audits/) | 各阶段 codex audit 报告原文(phase-1 … phase-N) | living |
