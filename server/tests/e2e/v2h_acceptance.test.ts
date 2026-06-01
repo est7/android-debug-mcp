@@ -115,15 +115,28 @@ async function tapNavBySuffix(suffix: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * Collect ALL matching poppo_nav records across pages. The streaming source
+ * returns records oldest-first and truncates at `limit` (next page via cursor),
+ * so a single page's last element is the limit-th OLDEST record, not the latest
+ * visible page. Page to exhaustion so `.at(-1)` is the true newest record.
+ */
 async function navNow(typeIn: string[]): Promise<Array<Record<string, unknown>>> {
-  const s = expectOk(
-    await call("android_debug_search_evidence", {
-      runId: runId(),
-      query: { source: "poppo_nav", typeIn },
-      limit: 50,
-    }),
-  );
-  return (s.records as Array<Record<string, unknown>>) ?? [];
+  const all: Array<Record<string, unknown>> = [];
+  let cursor: string | undefined;
+  do {
+    const s = expectOk(
+      await call("android_debug_search_evidence", {
+        runId: runId(),
+        query: { source: "poppo_nav", typeIn },
+        limit: 500,
+        ...(cursor !== undefined ? { cursor } : {}),
+      }),
+    );
+    all.push(...((s.records as Array<Record<string, unknown>>) ?? []));
+    cursor = (s as { nextCursor?: string }).nextCursor;
+  } while (cursor !== undefined);
+  return all;
 }
 
 suite("v2-H real-device acceptance", () => {
