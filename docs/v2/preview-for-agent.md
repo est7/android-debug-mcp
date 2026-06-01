@@ -28,6 +28,38 @@ an additive override to the v2-G.1 text below:
   as query params (`imei`, `oaid`, `smei_id`, `_uid`, `uuid`,
   `appsflyer_id`, etc.).
 
+## v2-K K1/K2 amendment — `search_evidence.order`
+
+Locked 2026-06-01 by `v2-k-implementation-plan.md`. This amendment applies to
+`search_evidence` only; `extract_evidence_context` remains a marker-window tool
+whose timeline semantics are ascending by `tsMs`.
+
+- `search_evidence` accepts top-level `order?: "asc" | "desc"` beside
+  `limit` / `cursor` / `fields`. It is intentionally not part of the
+  source-specific `query`.
+- Default `order` is `"asc"`, preserving the existing oldest-first paginated
+  behavior and cursor contract.
+- `order:"desc"` returns a single newest-first page: `records[0]` is the newest
+  matching record, `nextCursor` is never set, and combining `order:"desc"` with
+  `cursor` is `query_malformed` with message
+  `desc order does not paginate; omit cursor`.
+- Current visible fragment recipe:
+
+```ts
+const current = search_evidence({
+  query: { source: "poppo_nav" },
+  order: "desc",
+  limit: 1,
+}).records[0];
+```
+
+- Sortable sources such as `poppo_http` use `sortKey` descending, then
+  `slice(0, limit)`. Streaming sources such as `poppo_nav` scan all matching
+  records with an O(limit) ring buffer, then reverse the retained tail. For a
+  single append-only file this is exact; for hypothetical multi-file streaming
+  sources, `desc` inherits the existing basename-order approximation before
+  line-order within each file.
+
 Grill 进度:
 - **Round 1**(2026-05-27,codex STOP) — 5 条 blocking + 3 条 advisory + 6 条
   open-question 答案,**全部 fold-in 完毕**;详见 § Amendments § "Round 1"。

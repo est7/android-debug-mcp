@@ -43,6 +43,7 @@ const inputSchema = z
       .max(500, "limit must be <= 500")
       .default(100),
     cursor: z.string().min(1, "cursor must be non-empty").optional(),
+    order: z.enum(["asc", "desc"]).optional(),
     fields: z.array(z.string().min(1).max(64)).max(16).optional(),
     fullRecords: z.boolean().default(false).optional(),
   })
@@ -70,10 +71,10 @@ const description = [
   "Search a debug run's evidence (per-source JSONL files pulled from the device on demand), streaming and paginated.",
   "",
   "Use when: the agent wants records from an evidence source declared by the active session's profile (e.g. HTTP logs from `poppo_http`).",
-  "Args: `runId`; `query` (must carry `source: <sourceId>` PLUS at least one source-specific positive filter — e.g. for `poppo_http`: pathPrefix / methodIn / outcome / tsMsRange / hostContains / durationMsGte / errorTypeIn. `excludeHeartbeat` alone does NOT narrow; if you want records around a marker, use `extract_evidence_context` instead — it auto-injects `tsMsRange`); `limit` (1-500, default 100); `cursor` (opaque, from a prior `nextCursor` — pass the same `query` across pages); `fields` (default digest; for `poppo_http` opt into sections: request.headers|request.params|request.body|request.decoded|response.headers|response.body); `fullRecords` (default `false`; pass `true` for all sections with body untruncated, still source-redacted, limit capped at 10).",
+  "Args: `runId`; `query` (must carry `source: <sourceId>` PLUS at least one source-specific positive filter — e.g. for `poppo_http`: pathPrefix / methodIn / outcome / tsMsRange / hostContains / durationMsGte / errorTypeIn. `excludeHeartbeat` alone does NOT narrow; if you want records around a marker, use `extract_evidence_context` instead — it auto-injects `tsMsRange`); `limit` (1-500, default 100); `cursor` (opaque, from a prior `nextCursor` — pass the same `query` across pages); `order` (`asc` default = oldest-first paginated current behavior; `desc` = newest-first single page, never paginates, and must not be combined with `cursor`); `fields` (default digest; for `poppo_http` opt into sections: request.headers|request.params|request.body|request.decoded|response.headers|response.body); `fullRecords` (default `false`; pass `true` for all sections with body untruncated, still source-redacted, limit capped at 10).",
   "Source-specific shapes: for `poppo_http`, `tsMsRange` MUST be `{from:number,to:number}` — both bounds required, `to >= from`, window `to - from <= 24h` (86400000 ms). Partial ranges (e.g. `{from:0}`) are rejected as `query_malformed`. A `poppo_http` query without `tsMsRange` is allowed but not session-scoped; the response includes a warning. Use `extract_evidence_context` for narrow marker-anchored windows.",
-  "Returns: `{records[], warnings?, nextCursor?, statsRun}`. `warnings` lists soft-empty reasons and non-fatal query caveats such as `poppo_http` calls without `tsMsRange`. `statsRun` reports `{filesScanned, recordsScanned, pullsTriggered, pulledFiles}` for audit / agent metrics. When the source declares preview, each record carries `record._meta.preview = {truncated:boolean, fullSizeBytes:number, truncatedFields:string[], redactedFields?:string[], available?:string[], sizes?:Record<string,number>}`. `truncated/truncatedFields` mean size-lossy preview and can justify `fullRecords:true`; `redactedFields` means safety masking and is not counted as truncation. `available/sizes` describe source sections available on that record after redaction.",
-  "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session went degraded; `query_malformed` when the source-specific fields fail per-source strict validation OR when `fullRecords:true` is combined with `limit > 10` (paginate instead); `query_underspecified` when the source requires at least one narrowing filter and none is supplied; `invalid_cursor` for a tampered or stale cursor.",
+  'Returns: `{records[], warnings?, nextCursor?, statsRun}`. With `order:"desc"`, `records` are newest-first and `nextCursor` is never set. Current visible fragment recipe: `search_evidence({ query:{source:"poppo_nav"}, order:"desc", limit:1 }).records[0]`. `warnings` lists soft-empty reasons and non-fatal query caveats such as `poppo_http` calls without `tsMsRange`. `statsRun` reports `{filesScanned, recordsScanned, pullsTriggered, pulledFiles}` for audit / agent metrics. When the source declares preview, each record carries `record._meta.preview = {truncated:boolean, fullSizeBytes:number, truncatedFields:string[], redactedFields?:string[], available?:string[], sizes?:Record<string,number>}`. `truncated/truncatedFields` mean size-lossy preview and can justify `fullRecords:true`; `redactedFields` means safety masking and is not counted as truncation. `available/sizes` describe source sections available on that record after redaction.',
+  'Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session went degraded; `query_malformed` when the source-specific fields fail per-source strict validation, when `order:"desc"` is combined with `cursor`, OR when `fullRecords:true` is combined with `limit > 10` (paginate instead); `query_underspecified` when the source requires at least one narrowing filter and none is supplied; `invalid_cursor` for a tampered or stale cursor.',
 ].join("\n");
 
 function zeroStats(): RunStats {
@@ -141,6 +142,12 @@ export function registerSearchEvidence(server: McpServer, manager: SessionManage
           { tool: "search_evidence", limit: input.limit, fullRecords: true },
         );
       }
+      const order = input.order ?? "asc";
+      if (order === "desc" && input.cursor !== undefined) {
+        throw new ToolDomainError("query_malformed", "desc order does not paginate; omit cursor", {
+          tool: "search_evidence",
+        });
+      }
 
       const dispatched = dispatchQuery(session.profile, input.query);
       if (dispatched.kind === "malformed") {
@@ -175,6 +182,7 @@ export function registerSearchEvidence(server: McpServer, manager: SessionManage
         runDir: session.runDir,
         limit: input.limit,
         cursor: input.cursor ?? null,
+        order,
         mode: "lazy",
         ...(input.fields !== undefined ? { fields: input.fields } : {}),
         fullRecords,

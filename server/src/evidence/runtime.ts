@@ -8,6 +8,7 @@ import type {
   ParsedRecord,
   PreviewOpts,
 } from "../profile/types.ts";
+import { readLinesFrom } from "../search/line_reader.ts";
 import { compareSortKeys, decodeCursor, encodeCursor } from "./cursor.ts";
 import {
   type MtimeCache,
@@ -49,6 +50,7 @@ import {
  */
 
 export type EvidenceRuntimeMode = "lazy" | "seal";
+export type EvidenceOrder = "asc" | "desc";
 
 export interface SearchEvidenceInput {
   readonly source: EvidenceSource;
@@ -58,6 +60,7 @@ export interface SearchEvidenceInput {
   readonly runDir: string;
   readonly limit: number;
   readonly cursor: string | null;
+  readonly order?: EvidenceOrder;
   readonly mode?: EvidenceRuntimeMode;
   /** Passed into `previewForAgent` so sources can expose opt-in sections. */
   readonly fields?: readonly string[];
@@ -93,6 +96,10 @@ export interface SearchEvidenceResult {
 
 export async function searchEvidence(input: SearchEvidenceInput): Promise<SearchEvidenceResult> {
   const mode: EvidenceRuntimeMode = input.mode ?? "lazy";
+  const order: EvidenceOrder = input.order ?? "asc";
+  if (order === "desc" && input.cursor !== null) {
+    throw new ToolDomainError("query_malformed", "desc order does not paginate; omit cursor", {});
+  }
 
   const cache = await readMtimeCache(input.runDir, input.source.id);
   const pulls = await syncDevicePulls(input, cache, mode);
@@ -113,9 +120,9 @@ export async function searchEvidence(input: SearchEvidenceInput): Promise<Search
   // switch to collect-then-sort-then-keyset-paginate. Otherwise keep Phase
   // 3's streaming file/line cursor path.
   if (input.source.sortKey !== undefined) {
-    return runSortPath(input, effectiveQuery, cache, pulls);
+    return runSortPath(input, effectiveQuery, cache, pulls, order);
   }
-  return runStreamPath(input, effectiveQuery, cache, pulls);
+  return runStreamPath(input, effectiveQuery, cache, pulls, order);
 }
 
 /** Phase 3 streaming path — basename → line order, file/lineOffset cursor. */
@@ -124,8 +131,33 @@ async function runStreamPath(
   query: EvidenceQuery,
   cache: MtimeCache,
   pulls: readonly PullSummary[],
+  order: EvidenceOrder,
 ): Promise<SearchEvidenceResult> {
   const localFiles = sortedLocalFiles(cache);
+  if (order === "desc") {
+    const iter = await iterateLocalDesc({
+      source: input.source,
+      parsedQuery: query,
+      files: localFiles,
+      limit: input.limit,
+    });
+    const records = applyPostPageTransform(iter.records, input.source, {
+      ...(input.fields !== undefined ? { fields: input.fields } : {}),
+      fullRecords: input.fullRecords ?? false,
+    });
+    return {
+      records,
+      nextCursor: null,
+      pulls,
+      statsRun: {
+        filesScanned: iter.filesScanned,
+        recordsScanned: iter.recordsScanned,
+        pullsTriggered: pulls.length,
+        pulledFiles: pulls.map((p) => p.localPath),
+      },
+    };
+  }
+
   const decoded =
     input.cursor !== null
       ? decodeCursor(input.cursor, {
@@ -191,6 +223,7 @@ async function runSortPath(
   query: EvidenceQuery,
   cache: MtimeCache,
   pulls: readonly PullSummary[],
+  order: EvidenceOrder,
 ): Promise<SearchEvidenceResult> {
   const sortKey = input.source.sortKey;
   if (sortKey === undefined) {
@@ -236,7 +269,28 @@ async function runSortPath(
 
   const sorted = collected
     .map((rec) => ({ rec, key: sortKey(rec) }))
-    .sort((a, b) => compareSortKeys(a.key, b.key));
+    .sort((a, b) =>
+      order === "desc" ? compareSortKeys(b.key, a.key) : compareSortKeys(a.key, b.key),
+    );
+
+  if (order === "desc") {
+    const pageRecords = sorted.slice(0, input.limit).map((e) => e.rec);
+    const records = applyPostPageTransform(pageRecords, input.source, {
+      ...(input.fields !== undefined ? { fields: input.fields } : {}),
+      fullRecords: input.fullRecords ?? false,
+    });
+    return {
+      records,
+      nextCursor: null,
+      pulls,
+      statsRun: {
+        filesScanned,
+        recordsScanned,
+        pullsTriggered: pulls.length,
+        pulledFiles: pulls.map((p) => p.localPath),
+      },
+    };
+  }
 
   // Resume past the cursor's key (strictly greater).
   let startIdx = 0;
@@ -368,6 +422,48 @@ interface IterateOutput {
   readonly recordsScanned: number;
   /** Where the next page would start; `null` when iteration completed. */
   readonly next: { readonly localPath: string; readonly lineOffset: number } | null;
+}
+
+interface IterateDescInput {
+  readonly source: EvidenceSource;
+  readonly parsedQuery: EvidenceQuery;
+  readonly files: readonly string[];
+  readonly limit: number;
+}
+
+async function iterateLocalDesc(input: IterateDescInput): Promise<IterateOutput> {
+  const ring = new Array<ParsedRecord>(input.limit);
+  let start = 0;
+  let count = 0;
+  let filesScanned = 0;
+  let recordsScanned = 0;
+
+  for (const localPath of input.files) {
+    filesScanned++;
+    for await (const { text: line } of readLinesFrom(localPath)) {
+      if (line === "") continue;
+      recordsScanned++;
+      const rec = input.source.parseLine(line);
+      if (rec === null) continue;
+      if (!input.source.matchQuery(rec, input.parsedQuery)) continue;
+
+      if (count < input.limit) {
+        ring[(start + count) % input.limit] = rec;
+        count++;
+      } else {
+        ring[start] = rec;
+        start = (start + 1) % input.limit;
+      }
+    }
+  }
+
+  const oldestFirst: ParsedRecord[] = [];
+  for (let i = 0; i < count; i++) {
+    const rec = ring[(start + i) % input.limit];
+    if (rec === undefined) throw new Error("desc ring buffer missing record");
+    oldestFirst.push(rec);
+  }
+  return { records: oldestFirst.reverse(), filesScanned, recordsScanned, next: null };
 }
 
 async function iterateLocal(input: IterateInput): Promise<IterateOutput> {

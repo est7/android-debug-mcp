@@ -363,9 +363,13 @@ function callText(result: unknown): string {
 
 async function startRun(
   h: Harness,
-  opts: { withProfile?: boolean } = {},
+  opts: { withProfile?: boolean; profileName?: string } = {},
 ): Promise<{ runId: string; runDir: string }> {
-  if (opts.withProfile === true) writeProfileJson(h.projectRoot, TEST_PROFILE_NAME);
+  if (opts.profileName !== undefined) {
+    writeProfileJson(h.projectRoot, opts.profileName);
+  } else if (opts.withProfile === true) {
+    writeProfileJson(h.projectRoot, TEST_PROFILE_NAME);
+  }
   const r = await h.client.callTool({
     name: "android_debug_start_session",
     arguments: { packageName: "com.example.v2g_evidence", projectRoot: h.projectRoot },
@@ -545,6 +549,24 @@ describe("search_evidence — strict per-source validation", () => {
 });
 
 describe("search_evidence — cursor integrity", () => {
+  it("order desc + cursor → query_malformed", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h, { withProfile: true });
+    const r = await h.client.callTool({
+      name: "android_debug_search_evidence",
+      arguments: {
+        runId,
+        query: { source: "fake_src" },
+        order: "desc",
+        cursor: "opaque-from-old-page",
+      },
+    });
+    expect(r.isError).toBe(true);
+    const err = JSON.parse(callText(r)) as { error: string; message: string };
+    expect(err.error).toBe("query_malformed");
+    expect(err.message).toBe("desc order does not paginate; omit cursor");
+  });
+
   it("tampered cursor (foreign runId) → invalid_cursor", async () => {
     const h = await harness();
     const { runId } = await startRun(h, { withProfile: true });
@@ -570,6 +592,33 @@ describe("search_evidence — cursor integrity", () => {
     expect(r.isError).toBe(true);
     const err = JSON.parse(callText(r)) as { error: string };
     expect(err.error).toBe("invalid_cursor");
+  });
+});
+
+describe("search_evidence — order desc", () => {
+  it("current page recipe: streaming nav source returns the max-tsMs row at records[0]", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h, { profileName: MULTI_PROFILE_NAME });
+
+    const r = await h.client.callTool({
+      name: "android_debug_search_evidence",
+      arguments: {
+        runId,
+        query: { source: "timeline_nav" },
+        order: "desc",
+        limit: 1,
+      },
+    });
+
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    expect(sc.nextCursor).toBeUndefined();
+    expect(sc.records).toHaveLength(1);
+    expect((sc.records as Record<string, unknown>[])[0]).toMatchObject({
+      source: "timeline_nav",
+      tsMs: 1_716_600_000_800,
+      label: "nav-b",
+    });
   });
 });
 
@@ -1321,6 +1370,40 @@ describe("v2-G.1 Phase 3 — fullRecords + reject path", () => {
       expect(rec._meta?.preview?.available).toEqual(["path"]);
       expect(rec._meta?.preview?.sizes?.path).toBeGreaterThan(0);
     }
+  });
+
+  it("search_evidence order desc with fields/fullRecords still applies preview", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h, { profileName: PREVIEW_PROFILE_NAME });
+
+    const out = await h.client.callTool({
+      name: "android_debug_search_evidence",
+      arguments: {
+        runId,
+        query: { source: "fake_src", pathPrefix: "/api" },
+        order: "desc",
+        limit: 1,
+        fields: ["path"],
+        fullRecords: true,
+      },
+    });
+
+    expect(out.isError).toBeFalsy();
+    const sc = structured(out);
+    expect(sc.nextCursor).toBeUndefined();
+    const records = sc.records as Array<{
+      path: string;
+      fieldEcho: string[];
+      tsMs: number;
+      _meta?: { preview?: { truncated: boolean; available?: string[] } };
+    }>;
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      tsMs: 1_716_600_001_000,
+      path: "[full-redacted]",
+      fieldEcho: ["path"],
+      _meta: { preview: { truncated: false, available: ["path"] } },
+    });
   });
 
   it("commands.jsonl audit row: fullRecords:true → sums all 0", async () => {

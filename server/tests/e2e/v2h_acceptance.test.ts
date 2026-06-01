@@ -15,7 +15,7 @@ import { resetPathsCache } from "../../src/store/paths.ts";
  * Proves the v2-H contract end-to-end on a REAL device whose installed
  * **debug** build carries the H4 nav producer (debuglibrary nav-logs writer):
  *
- *   1. Current screen   — `search_evidence({source:"poppo_nav"})` latest = visible fragment.
+ *   1. Current screen   — `search_evidence({source:"poppo_nav"}, order:"desc")` latest = visible fragment.
  *   2. Page→API attrib  — a nav record's ts anchors `extract_evidence_context(sources:[nav,http])`,
  *                          merging both kinds on one tsMs timeline.
  *   3. Token economy     — digest default ≪ `fullRecords` for the same query.
@@ -115,28 +115,17 @@ async function tapNavBySuffix(suffix: string): Promise<boolean> {
   return true;
 }
 
-/**
- * Collect ALL matching poppo_nav records across pages. The streaming source
- * returns records oldest-first and truncates at `limit` (next page via cursor),
- * so a single page's last element is the limit-th OLDEST record, not the latest
- * visible page. Page to exhaustion so `.at(-1)` is the true newest record.
- */
+/** Return recent matching poppo_nav records newest-first. */
 async function navNow(typeIn: string[]): Promise<Array<Record<string, unknown>>> {
-  const all: Array<Record<string, unknown>> = [];
-  let cursor: string | undefined;
-  do {
-    const s = expectOk(
-      await call("android_debug_search_evidence", {
-        runId: runId(),
-        query: { source: "poppo_nav", typeIn },
-        limit: 500,
-        ...(cursor !== undefined ? { cursor } : {}),
-      }),
-    );
-    all.push(...((s.records as Array<Record<string, unknown>>) ?? []));
-    cursor = (s as { nextCursor?: string }).nextCursor;
-  } while (cursor !== undefined);
-  return all;
+  const s = expectOk(
+    await call("android_debug_search_evidence", {
+      runId: runId(),
+      query: { source: "poppo_nav", typeIn },
+      order: "desc",
+      limit: 200,
+    }),
+  );
+  return (s.records as Array<Record<string, unknown>>) ?? [];
 }
 
 suite("v2-H real-device acceptance", () => {
@@ -191,7 +180,7 @@ suite("v2-H real-device acceptance", () => {
         afterMe.length,
         "no poppo_nav fragment records — build+install the DEBUG apk with H4 (debuglibrary nav producer)",
       ).toBeGreaterThan(0);
-      const meLeaf = afterMe.at(-1)?.name as string;
+      const meLeaf = afterMe.at(0)?.name as string;
       expect(typeof meLeaf).toBe("string");
       expect(meLeaf.length).toBeGreaterThan(0);
 
@@ -199,7 +188,7 @@ suite("v2-H real-device acceptance", () => {
       expect(tappedMsg, "navMsg not found").toBe(true);
       await sleep(FLUSH_WAIT_MS);
       const afterMsg = await navNow(["fragment"]);
-      const msgLeaf = afterMsg.at(-1)?.name as string;
+      const msgLeaf = afterMsg.at(0)?.name as string;
       expect(typeof msgLeaf).toBe("string");
 
       // Distinct tabs → distinct visible fragment leaf. This proves the leaf-resumed
@@ -223,7 +212,7 @@ suite("v2-H real-device acceptance", () => {
         frags.length,
         "need at least one nav record (scenario 1 should have produced them)",
       ).toBeGreaterThan(0);
-      const anchor = frags.at(-1) as Record<string, unknown>;
+      const anchor = frags.at(0) as Record<string, unknown>;
       const markerMs = anchor.tsMs as number;
       const markerIso = new Date(markerMs).toISOString();
 

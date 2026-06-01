@@ -43,8 +43,9 @@ function makeFakeSource(opts: {
   /** Map from device path → newline-joined record lines that pullFile writes locally. */
   bytes: Readonly<Record<string, string>>;
   pulls?: Array<{ devicePath: string; localPath: string }>;
+  sortable?: boolean;
 }): EvidenceSource {
-  return {
+  const source: EvidenceSource = {
     id: "fake_src",
     querySchema: z
       .object({
@@ -91,6 +92,13 @@ function makeFakeSource(opts: {
       return r;
     },
   };
+  if (opts.sortable === true) {
+    source.sortKey = (record) => {
+      const r = record as unknown as FakeRecord;
+      return [r.tsMs];
+    };
+  }
+  return source;
 }
 
 const ctx: EvidenceContext = {
@@ -315,6 +323,94 @@ describe("searchEvidence — iteration / matching", () => {
 });
 
 describe("searchEvidence — pagination", () => {
+  it("streaming order desc returns the newest limit matches descending without a cursor", async () => {
+    const source = makeFakeSource({
+      files: [{ path: "/d/a.jsonl", name: "a.jsonl", mtimeMs: 100 }],
+      bytes: { "/d/a.jsonl": "1|/a\n2|/b\n3|/c\n4|/d\n5|/e\n" },
+    });
+
+    const desc = await searchEvidence({
+      source,
+      parsedQuery: { source: "fake_src" } as EvidenceQuery,
+      ctx,
+      runId: "run-1",
+      runDir,
+      limit: 3,
+      cursor: null,
+      order: "desc",
+    });
+    expect(desc.records.map((r) => (r as unknown as FakeRecord).tsMs)).toEqual([5, 4, 3]);
+    expect(desc.nextCursor).toBeNull();
+    expect(desc.statsRun.recordsScanned).toBe(5);
+
+    const asc = await searchEvidence({
+      source,
+      parsedQuery: { source: "fake_src" } as EvidenceQuery,
+      ctx,
+      runId: "run-1",
+      runDir,
+      limit: 3,
+      cursor: null,
+      order: "asc",
+    });
+    expect(asc.records.map((r) => (r as unknown as FakeRecord).tsMs)).toEqual([1, 2, 3]);
+    expect(asc.nextCursor).not.toBeNull();
+  });
+
+  it("sortKey order desc returns top limit by descending sortKey without a cursor", async () => {
+    const source = makeFakeSource({
+      files: [{ path: "/d/a.jsonl", name: "a.jsonl", mtimeMs: 100 }],
+      bytes: { "/d/a.jsonl": "1|/a\n4|/d\n2|/b\n5|/e\n3|/c\n" },
+      sortable: true,
+    });
+
+    const out = await searchEvidence({
+      source,
+      parsedQuery: { source: "fake_src" } as EvidenceQuery,
+      ctx,
+      runId: "run-1",
+      runDir,
+      limit: 3,
+      cursor: null,
+      order: "desc",
+    });
+
+    expect(out.records.map((r) => (r as unknown as FakeRecord).tsMs)).toEqual([5, 4, 3]);
+    expect(out.nextCursor).toBeNull();
+    expect(out.statsRun.recordsScanned).toBe(5);
+  });
+
+  it("order desc with cursor rejects as query_malformed before iterating", async () => {
+    const source = makeFakeSource({
+      files: [{ path: "/d/a.jsonl", name: "a.jsonl", mtimeMs: 100 }],
+      bytes: { "/d/a.jsonl": "1|/x\n" },
+    });
+    const cursor = encodeCursor({
+      kind: "stream",
+      runId: "run-1",
+      source: "fake_src",
+      fileKey: "a.jsonl",
+      lineOffset: 1,
+    });
+
+    await expect(
+      searchEvidence({
+        source,
+        parsedQuery: { source: "fake_src" } as EvidenceQuery,
+        ctx,
+        runId: "run-1",
+        runDir,
+        limit: 1,
+        cursor,
+        order: "desc",
+      }),
+    ).rejects.toMatchObject({
+      name: "ToolDomainError",
+      code: "query_malformed",
+      message: "desc order does not paginate; omit cursor",
+    });
+  });
+
   it("limit reached → returns nextCursor; resume yields the rest", async () => {
     const source = makeFakeSource({
       files: [{ path: "/d/a.jsonl", name: "a.jsonl", mtimeMs: 100 }],
