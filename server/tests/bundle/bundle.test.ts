@@ -30,6 +30,16 @@ function makeRunDir(): string {
     `${JSON.stringify({ tsRaw: "05-20 10:00:00.000", message: "Authorization: Basic c2VjcmV0" })}\n`,
   );
   writeFileSync(join(runDir, "logcat.raw.txt"), "raw byte log line\n");
+  // crash.jsonl carries a verbatim logcat line whose exception text embeds secrets.
+  writeFileSync(
+    join(runDir, "crash.jsonl"),
+    `${JSON.stringify({
+      rawLineNo: 5,
+      type: "java",
+      marker: "FATAL EXCEPTION",
+      line: "E AndroidRuntime: java.lang.IllegalArgumentException: https://x?_sign=SECRETSIG&uuid=9906b772cd3b27a0",
+    })}\n`,
+  );
   writeFileSync(join(runDir, "artifacts", `screenshot-${RUN_ID}.png`), "PNGDATA");
   return runDir;
 }
@@ -61,6 +71,8 @@ describe("createBundle logs policy (§ C-4)", () => {
     expect(entries.some((e) => e.endsWith("logcat.jsonl"))).toBe(false);
     expect(entries.some((e) => e.endsWith("logcat.raw.txt"))).toBe(false);
     expect(entries.some((e) => e.endsWith("logcat.redacted.jsonl"))).toBe(false);
+    // crash.jsonl is logcat-derived (carries raw lines) → dropped under `none`.
+    expect(entries.some((e) => e.endsWith("crash.jsonl"))).toBe(false);
   });
 
   it("`raw` includes logcat.jsonl and logcat.raw.txt verbatim", async () => {
@@ -82,6 +94,25 @@ describe("createBundle logs policy (§ C-4)", () => {
     const redacted = readFileSync(join(extractDir, RUN_ID, "logcat.redacted.jsonl"), "utf8");
     expect(redacted).not.toContain("c2VjcmV0");
     expect(JSON.parse(redacted.trim()).message).toBe("Authorization: ***");
+  });
+
+  it("`redacted` scrubs crash.jsonl's raw line (F1 fourth egress) while keeping metadata", async () => {
+    const { entries, bundlePath } = await build("redacted");
+    expect(entries.some((e) => e.endsWith("crash.jsonl"))).toBe(true);
+
+    const extractDir = join(workDir, "extract-crash");
+    mkdirSync(extractDir, { recursive: true });
+    await exec("tar", ["-xzf", bundlePath, "-C", extractDir]);
+    const crash = readFileSync(join(extractDir, RUN_ID, "crash.jsonl"), "utf8");
+    // No plaintext secret survives in the shipped crash line...
+    expect(crash).not.toContain("9906b772cd3b27a0");
+    expect(crash).not.toContain("SECRETSIG");
+    // ...but the crash metadata + scrubbed line structure are intact.
+    const obj = JSON.parse(crash.trim());
+    expect(obj.type).toBe("java");
+    expect(obj.rawLineNo).toBe(5);
+    expect(obj.line).toContain("IllegalArgumentException");
+    expect(obj.line).toContain("uuid=***");
   });
 
   it("omits macOS AppleDouble metadata files from the archive", async () => {

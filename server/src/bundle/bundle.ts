@@ -185,13 +185,50 @@ async function applyLogsPolicy(stageRunDir: string, logs: BundleLogs): Promise<v
   // `none` and `redacted` both drop the raw byte log.
   await rm(join(stageRunDir, "logcat.raw.txt"), { force: true });
   const jsonl = join(stageRunDir, "logcat.jsonl");
+  const crash = join(stageRunDir, "crash.jsonl");
   if (logs === "none") {
     await rm(jsonl, { force: true });
+    // crash.jsonl's `line` is a verbatim logcat.raw.txt line — logcat-derived,
+    // so it is dropped under `none` along with the rest of the logcat content.
+    await rm(crash, { force: true });
     return;
   }
-  // redacted: replace logcat.jsonl with a scrubbed logcat.redacted.jsonl.
+  // redacted: replace logcat.jsonl with a scrubbed logcat.redacted.jsonl, and
+  // scrub crash.jsonl's raw `line` / `marker` in place (same egress secrets).
   await redactLogcatJsonl(jsonl, join(stageRunDir, "logcat.redacted.jsonl"));
   await rm(jsonl, { force: true });
+  await redactCrashJsonl(crash);
+}
+
+/**
+ * Scrub `crash.jsonl` in place. Each entry's `line` is a verbatim
+ * `logcat.raw.txt` line (and `marker` a substring of it), so a crash whose
+ * exception text embeds a signed URL / device id / cookie would otherwise ship
+ * unredacted in a `redacted` bundle. A missing input is a no-op.
+ */
+async function redactCrashJsonl(path: string): Promise<void> {
+  const exists = await stat(path)
+    .then(() => true)
+    .catch(() => false);
+  if (!exists) return;
+  const tmp = `${path}.redacting`;
+  const out = await AppendStream.open(tmp);
+  try {
+    for await (const { text } of readLinesFrom(path)) {
+      let obj: Record<string, unknown>;
+      try {
+        obj = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (typeof obj.line === "string") obj.line = redactString(obj.line);
+      if (typeof obj.marker === "string") obj.marker = redactString(obj.marker);
+      await out.append(obj);
+    }
+  } finally {
+    await out.close();
+  }
+  await rename(tmp, path);
 }
 
 /**

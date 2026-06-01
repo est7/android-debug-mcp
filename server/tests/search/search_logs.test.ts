@@ -346,3 +346,38 @@ describe("searchLogs response budget (§ G-5)", () => {
     expect(r.nextCursor).toBeDefined();
   });
 });
+
+describe("searchLogs redaction (egress)", () => {
+  // A real Poppo `http/heart-beat` line dumps the full signed URL into logcat.
+  const PII_MSG =
+    "FullURL: https://test-api-global.v.show/user/info?_random=NrbqUmdXBS0z&_sign=SECRETSIGVALUE&_uid=37142512&smei_id=SMEISECRET&device_name=Redmi&uuid=9906b772cd3b27a0";
+
+  it("redacts device IDs and signatures in the returned message, but still filters on the raw line", async () => {
+    writeLogcat([
+      {
+        tsRaw: "05-20 10:00:09.000",
+        rawLineNo: 9,
+        buffer: "main",
+        level: "D",
+        tag: "http/heart-beat",
+        pid: 100,
+        tid: 100,
+        message: PII_MSG,
+      },
+    ]);
+    // `query` matches on the RAW message (the secret is greppable as a filter)...
+    const r = await searchLogs(runDir, { query: "9906b772cd3b27a0", limit: 10 }, 23_000);
+    expect(r.entries).toHaveLength(1);
+    const msg = r.entries[0]?.message ?? "";
+    // ...but the RETURNED message carries no plaintext secret.
+    expect(msg).not.toContain("9906b772cd3b27a0");
+    expect(msg).not.toContain("SECRETSIGVALUE");
+    expect(msg).not.toContain("37142512");
+    expect(msg).not.toContain("SMEISECRET");
+    // Structure preserved (keys kept, values blanked).
+    expect(msg).toContain("uuid=***");
+    expect(msg).toContain("_sign=***");
+    // Non-sensitive fields survive.
+    expect(msg).toContain("device_name=Redmi");
+  });
+});

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ToolDomainError } from "../mcp/toolError.ts";
+import { redactString } from "../redact/redact.ts";
 import { type SearchCursor, decodeCursor, encodeCursor } from "./cursor.ts";
 import { readLinesFrom } from "./line_reader.ts";
 
@@ -192,10 +193,10 @@ export async function searchLogs(
     }
     if (entries.length === 0 && size > charBudget) {
       // A single line bigger than the whole budget: include it cut, flag it.
-      entries.push(cutMessage(entry));
+      entries.push(cutMessage(redactEntryMessage(entry)));
       truncated = true;
     } else {
-      entries.push(entry);
+      entries.push(redactEntryMessage(entry));
     }
     runningSize += size;
     resumeOffset = lineEnd;
@@ -313,6 +314,16 @@ function matches(entry: LogEntry, offset: number, ctx: MatchContext): boolean {
   if (ctx.opts.sinceTs !== undefined && entry.tsRaw < ctx.opts.sinceTs) return false;
   if (ctx.queryLc !== undefined && !entry.message.toLowerCase().includes(ctx.queryLc)) return false;
   return true;
+}
+
+/**
+ * Egress redaction. Decision #6 keeps `logcat.jsonl` raw on disk; any tool that
+ * surfaces a log message to the agent must redact it on the way out. Filtering
+ * (`query` / `tags` / …) still runs on the RAW line — only the returned
+ * `message` is blanked — so content search keeps working without leaking values.
+ */
+function redactEntryMessage(entry: LogEntry): LogEntry {
+  return { ...entry, message: redactString(entry.message) };
 }
 
 function cutMessage(entry: LogEntry): LogEntry {

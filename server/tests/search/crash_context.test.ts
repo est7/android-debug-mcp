@@ -140,3 +140,35 @@ describe("extractCrashContext edge cases", () => {
     expect((r.snippet ?? "").length).toBeLessThanOrEqual(200 + 32);
   });
 });
+
+describe("extractCrashContext redaction (egress)", () => {
+  it("scrubs device IDs / signatures from the snippet while keeping the stack", async () => {
+    const lines = [
+      "05-20 10:00:01.000 100 100 D http/heart-beat: FullURL: https://x/info?_sign=SECRETSIG&_uid=37142512&uuid=9906b772cd3b27a0",
+      "05-20 10:00:02.000 100 100 E AndroidRuntime: FATAL EXCEPTION: main",
+      "05-20 10:00:02.000 100 100 E AndroidRuntime: java.lang.NullPointerException: boom",
+      "05-20 10:00:02.000 100 100 E AndroidRuntime: \tat com.example.app.MainActivity.onCreate(MainActivity.java:42)",
+    ];
+    writeFileSync(join(runDir, "logcat.raw.txt"), `${lines.join("\n")}\n`);
+    writeFileSync(
+      join(runDir, "crash.jsonl"),
+      JSON.stringify({ rawLineNo: 2, type: "java", marker: "FATAL EXCEPTION", line: lines[1] }),
+    );
+
+    const r = await extractCrashContext(
+      runDir,
+      { crashIndex: 0, beforeLines: 5, afterLines: 5 },
+      BUDGET,
+    );
+
+    // PII swept into the window is blanked...
+    expect(r.snippet).not.toContain("9906b772cd3b27a0");
+    expect(r.snippet).not.toContain("SECRETSIG");
+    expect(r.snippet).not.toContain("37142512");
+    expect(r.snippet).toContain("uuid=***");
+    // ...but the crash stack survives, and signature parsing (on raw lines) holds.
+    expect(r.snippet).toContain("NullPointerException");
+    expect(r.snippet).toContain("MainActivity.onCreate(MainActivity.java:42)");
+    expect(r.mainException).toContain("NullPointerException");
+  });
+});

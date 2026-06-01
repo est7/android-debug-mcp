@@ -344,4 +344,14 @@ export interface EvidenceSource {
 export interface Profile {
   readonly name: string;
   readonly evidenceSources: readonly EvidenceSource[];
+  /**
+   * OPTIONAL — F2 (2026-06-01). Logcat tags that flood the unified timeline
+   * with content already structured by a dedicated source (e.g. Poppo's
+   * `http/heart-beat` dumps the full HTTP that `poppo_http` already provides).
+   * `extract_evidence_context`'s logcat pseudo-source default-excludes these,
+   * UNLESS the agent passes an explicit positive `tags` filter (which signals
+   * they want exactly those tags). Business knowledge stays in the profile
+   * (the adapter layer); core stays generic.
+   */
+  readonly logcatTimelineExcludeTags?: readonly string[];
 }

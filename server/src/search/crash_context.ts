@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ToolDomainError } from "../mcp/toolError.ts";
+import { redactString } from "../redact/redact.ts";
 import { readLinesFrom } from "./line_reader.ts";
 
 export type CrashType = "java" | "native" | "anr";
@@ -68,7 +69,10 @@ export async function extractCrashContext(
   );
   const { mainException, topFrame } = parseSignature(marker.type, window.lines, window.markerIndex);
   const fitted = fitWindow(window, charBudget);
-  let snippet = fitted.lines.join("\n");
+  // Egress redaction: logcat.raw.txt is raw on disk (decision #6). The crash
+  // window can sweep in unrelated PII-bearing lines (e.g. http/heart-beat dumps),
+  // so scrub each line on the way out. Signature parsing above ran on raw lines.
+  let snippet = fitted.lines.map(redactString).join("\n");
   let truncated = fitted.truncated;
   if (snippet.length > charBudget) {
     snippet = `${snippet.slice(0, charBudget)}…[snippet cut]`;

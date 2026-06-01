@@ -6,6 +6,7 @@ import { dispatchQuery } from "../../evidence/queryDispatch.ts";
 import { type PullSummary, type RunStats, searchEvidence } from "../../evidence/runtime.ts";
 import { logcatTsToEpochMs } from "../../logcat/ts.ts";
 import type { EvidenceQuery } from "../../profile/types.ts";
+import { redactString } from "../../redact/redact.ts";
 import { readLinesFrom } from "../../search/line_reader.ts";
 import {
   LOG_LEVELS,
@@ -160,7 +161,7 @@ const description = [
   "Extract evidence records around a marker timestamp recorded in a debug run's `events.jsonl`.",
   "",
   "Use when: the agent has an interesting event (mark, crash, evidence_pulled) and wants the source's records inside the window around it.",
-  'Args: `runId`; `markerIsoTs` (the `ts` field copied verbatim from a prior event); `beforeMs` / `afterMs` (0-60000, default 5000); exactly one of `query` or `sources`. `query` is the single-source, paginated path (must carry `source: <sourceId>` — same shape as `search_evidence.query`, minus any `tsMsRange` field; this tool injects a bounded `tsMsRange:{from,to}` from the marker). `sources` is the multi-source timeline path: an array of source-specific queries, each without `tsMsRange`; records are merged by `tsMs` into a digest sequence. `sources` accepts profile evidence sources plus pseudo-sources `logcat` and `events`. `logcat` requires at least one positive narrowing filter (`query`, `level`, `tags`, or `pids`); if the run has no device timezone, it contributes no records and returns warning `logcat timeline unavailable: device timezone unknown`. `events` supports `typeIn`; `crash` events carry `ref:"crash#<index>"` for `extract_crash_context`, and `evidence_pulled` is suppressed unless explicitly requested by `typeIn`. `limit` (1-500, default 100); `cursor` (single-source `query` path only); `fields` (default digest; for `poppo_http` opt into sections: request.headers|request.params|request.body|request.decoded|response.headers|response.body); `fullRecords` (default `false`; pass `true` for all sections with body untruncated, still source-redacted, limit capped at 10).',
+  'Args: `runId`; `markerIsoTs` (the `ts` field copied verbatim from a prior event); `beforeMs` / `afterMs` (0-60000, default 5000); exactly one of `query` or `sources`. `query` is the single-source, paginated path (must carry `source: <sourceId>` — same shape as `search_evidence.query`, minus any `tsMsRange` field; this tool injects a bounded `tsMsRange:{from,to}` from the marker). `sources` is the multi-source timeline path: an array of source-specific queries, each without `tsMsRange`; records are merged by `tsMs` into a digest sequence. `sources` accepts profile evidence sources plus pseudo-sources `logcat` and `events`. `logcat` requires at least one positive narrowing filter (`query`, `level`, `tags`, or `pids`); if the run has no device timezone, it contributes no records and returns warning `logcat timeline unavailable: device timezone unknown`. Profile-declared noisy tags are excluded by default unless an explicit positive `tags` filter is supplied. Messages are redacted on output. `events` supports `typeIn`; `crash` events carry `ref:"crash#<index>"` for `extract_crash_context`, and `evidence_pulled` is suppressed unless explicitly requested by `typeIn`. `limit` (1-500, default 100); `cursor` (single-source `query` path only); `fields` (default digest; for `poppo_http` opt into sections: request.headers|request.params|request.body|request.decoded|response.headers|response.body); `fullRecords` (default `false`; pass `true` for all sections with body untruncated, still source-redacted, limit capped at 10).',
   "Multi-source timeline is not paginated: when merged records exceed `limit`, the tool truncates the response and returns warning `multi-source truncated at limit; narrow ts/sources`.",
   "Returns: `{records[], warnings?, nextCursor?, statsRun, tsMsRange}`. `tsMsRange` echoes the resolved `{from, to}` window so the agent can verify the math. When the source declares preview, each record carries `record._meta.preview = {truncated, fullSizeBytes, truncatedFields, redactedFields?, available?, sizes?}`. `available/sizes` describe source sections available on that record after redaction. `truncated/truncatedFields` mean size-lossy preview; `redactedFields` means safety masking and is not counted as truncation.",
   "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session went degraded; `invalid_argument` when `query.tsMsRange` is set (this tool owns that field); `query_malformed` when the source-specific fields fail per-source strict validation OR when `fullRecords:true` is combined with `limit > 10` (paginate instead); `invalid_cursor` for a tampered cursor.",
@@ -286,7 +287,9 @@ async function collectLogcatTimeline(input: {
       level: entry.level,
       tag: entry.tag,
       pid: entry.pid,
-      message: truncateLogMessage(entry.message),
+      // Egress redaction: logcat.jsonl is raw on disk (decision #6); redact the
+      // full message BEFORE truncating so a secret straddling the cut is caught.
+      message: truncateLogMessage(redactString(entry.message)),
       rawLineNo: entry.rawLineNo,
     });
   }
@@ -478,9 +481,17 @@ export function registerExtractEvidenceContext(server: McpServer, manager: Sessi
               pushWarning(warnings, "logcat timeline unavailable: device timezone unknown");
               continue;
             }
+            // F2: default-exclude the profile's noisy tags, but only when the
+            // agent did NOT pin an explicit positive `tags` filter (an explicit
+            // `tags` means they want exactly those — possibly a "noisy" one).
+            const noisy = session.profile?.logcatTimelineExcludeTags ?? [];
+            const effective =
+              parsed.tags === undefined && noisy.length > 0
+                ? { ...parsed, excludeTags: [...(parsed.excludeTags ?? []), ...noisy] }
+                : parsed;
             const result = await collectLogcatTimeline({
               runDir: session.runDir,
-              query: parsed,
+              query: effective,
               tsMsRange,
               sessionStartMs: ctx.sessionStartMs,
               deviceTimezone: ctx.deviceTimezone,

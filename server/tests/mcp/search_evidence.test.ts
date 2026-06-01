@@ -282,6 +282,7 @@ const unifiedProfile: Profile = {
       [`${UNIFIED_BASE_MS + 200}|nav-after-tap`, ""].join("\n"),
     ),
   ],
+  logcatTimelineExcludeTags: ["http/heart-beat"],
 };
 
 // --- harness ------------------------------------------------------------------
@@ -710,6 +711,110 @@ describe("extract_evidence_context", () => {
     });
     expect(crashContext.isError).toBeFalsy();
     expect(structured(crashContext).mainException).toContain("NullPointerException");
+  });
+
+  it("redacts device IDs and signatures in logcat timeline messages (egress)", async () => {
+    const h = await harness();
+    writeProfileJson(h.projectRoot, UNIFIED_PROFILE_NAME);
+    const { runId, runDir } = await startRun(h);
+    const piiUrl =
+      "FullURL: https://x/user/info?_sign=SECRETSIG&_uid=37142512&smei_id=SMEISECRET&uuid=9906b772cd3b27a0";
+    writeFileSync(
+      join(runDir, "logcat.jsonl"),
+      `${JSON.stringify({
+        tsRaw: "05-20 10:15:49.250",
+        rawLineNo: 10,
+        buffer: "main",
+        level: "D",
+        tag: "http/heart-beat",
+        pid: 1234,
+        tid: 1235,
+        message: piiUrl,
+      })}\n`,
+    );
+
+    const r = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(UNIFIED_BASE_MS + 250).toISOString(),
+        beforeMs: 250,
+        afterMs: 250,
+        sources: [{ source: "logcat", tags: ["http/heart-beat"] }],
+        limit: 10,
+      },
+    });
+
+    expect(r.isError).toBeFalsy();
+    const records = structured(r).records as Array<{ source: string; message?: string }>;
+    const logRec = records.find((rec) => rec.source === "logcat");
+    expect(logRec, "logcat row must be present in the window").toBeDefined();
+    const msg = logRec?.message ?? "";
+    expect(msg).not.toContain("9906b772cd3b27a0");
+    expect(msg).not.toContain("SECRETSIG");
+    expect(msg).not.toContain("37142512");
+    expect(msg).not.toContain("SMEISECRET");
+    expect(msg).toContain("uuid=***");
+    expect(msg).toContain("_sign=***");
+  });
+
+  it("default-excludes profile noisy tags from the logcat timeline, but honors explicit tags (F2)", async () => {
+    const h = await harness();
+    writeProfileJson(h.projectRoot, UNIFIED_PROFILE_NAME);
+    const { runId, runDir } = await startRun(h);
+    writeFileSync(
+      join(runDir, "logcat.jsonl"),
+      [
+        JSON.stringify({
+          tsRaw: "05-20 10:15:49.240",
+          rawLineNo: 1,
+          buffer: "main",
+          level: "D",
+          tag: "http/heart-beat",
+          pid: 1,
+          tid: 1,
+          message: "#1 GET /user/info",
+        }),
+        JSON.stringify({
+          tsRaw: "05-20 10:15:49.260",
+          rawLineNo: 2,
+          buffer: "main",
+          level: "D",
+          tag: "AppFlow",
+          pid: 1,
+          tid: 1,
+          message: "screen rendered",
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    const callWith = async (
+      logcat: Record<string, unknown>,
+    ): Promise<Array<string | undefined>> => {
+      const r = await h.client.callTool({
+        name: "android_debug_extract_evidence_context",
+        arguments: {
+          runId,
+          markerIsoTs: new Date(UNIFIED_BASE_MS + 250).toISOString(),
+          beforeMs: 250,
+          afterMs: 250,
+          sources: [logcat],
+          limit: 10,
+        },
+      });
+      expect(r.isError).toBeFalsy();
+      return (structured(r).records as Array<{ tag?: string }>).map((rec) => rec.tag);
+    };
+
+    // No explicit `tags` → the profile's noisy tag is excluded by default.
+    const def = await callWith({ source: "logcat", level: "D" });
+    expect(def).toContain("AppFlow");
+    expect(def).not.toContain("http/heart-beat");
+
+    // Explicit `tags:["http/heart-beat"]` → opts the noisy tag back in.
+    const opted = await callWith({ source: "logcat", tags: ["http/heart-beat"] });
+    expect(opted).toContain("http/heart-beat");
   });
 
   it("rejects logcat timeline source without a positive narrowing filter", async () => {

@@ -21,4 +21,9 @@ import { poppoNavSource } from "./poppo_nav/source.ts";
 export const POPPO_VONE_PROFILE: Profile = {
   name: "poppo-vone",
   evidenceSources: [poppoHttpSource, poppoNavSource],
+  // `http/heart-beat` dumps the full HTTP request/response (URL, params, decoded,
+  // headers, body) into logcat — redundant with the structured `poppo_http` source
+  // and voluminous enough to crowd other sources out of a timeline window.
+  // Default-excluded from the logcat timeline; an explicit `tags` filter overrides.
+  logcatTimelineExcludeTags: ["http/heart-beat"],
 };
