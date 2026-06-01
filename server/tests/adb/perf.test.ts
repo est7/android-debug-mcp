@@ -62,6 +62,36 @@ Applications Memory Usage (in Kilobytes):
     });
   });
 
+  it("parses Graphics/Code from the colon-labeled App Summary (real device format)", () => {
+    const parsed = parseMemInfo(`
+Applications Memory Usage (in Kilobytes):
+** MEMINFO in pid 1234 [com.example.app] **
+                   Pss  Private  Private  SwapPss
+                 Total    Dirty    Clean    Dirty
+  Native Heap    35,436   35,000        0        0
+  Dalvik Heap     5,000    5,000        0        0
+        Stack     3,528    3,500        0        0
+ App Summary
+                       Pss(KB)                        Rss(KB)
+                        ------                         ------
+           Java Heap:    39908                          50240
+         Native Heap:    35436                          36216
+                Code:   210192                         305364
+               Stack:     3528                           3540
+            Graphics:      424                            424
+           TOTAL PSS:   324004            TOTAL RSS:   417328
+`);
+
+    // Graphics + Code appear only in the colon-labeled App Summary — the regression.
+    expect(parsed.digest.graphicsKb).toBe(424);
+    expect(parsed.digest.codeKb).toBe(210192);
+    // Table-sourced rows still resolve; TOTAL PSS from the colon line.
+    expect(parsed.digest.nativeHeapKb).toBe(35436);
+    expect(parsed.digest.dalvikHeapKb).toBe(5000);
+    expect(parsed.digest.totalPssKb).toBe(324004);
+    expect(parsed.warnings).toEqual([]);
+  });
+
   it("parses OEM TOTAL PSS colon output", () => {
     const parsed = parseMemInfo("TOTAL PSS: 42,001\n");
 

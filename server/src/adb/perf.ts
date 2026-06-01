@@ -114,7 +114,11 @@ function parseTotalPss(stdout: string): number | null {
 
 function parseMemRow(stdout: string, label: string): number | null {
   const escaped = label.replaceAll(" ", "\\s+");
-  return parseIntMatch(stdout, new RegExp(`^\\s*${escaped}\\s+([\\d,]+)`, "im"));
+  // `:?` tolerates the "App Summary" section's colon labels (`Graphics:`, `Code:`)
+  // as well as the per-category table's bare labels (`Native Heap`). Graphics and
+  // Code only appear (cleanly) in App Summary, where the colon is mandatory; the
+  // first numeric column captured is Pss(KB).
+  return parseIntMatch(stdout, new RegExp(`^\\s*${escaped}:?\\s+([\\d,]+)`, "im"));
 }
 
 function parseIntMatch(stdout: string, re: RegExp): number | null {
