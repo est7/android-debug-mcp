@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { ToolDomainError } from "../mcp/toolError.ts";
 import type {
@@ -25,11 +25,11 @@ import {
  * window — the tool handler decorates the query with `tsMsRange` before
  * calling). Mode-specific behaviour goes through `mode`:
  *
- *   - `mode="lazy"`     (default): pull only files where mtime changed.
+ *   - `mode="lazy"`     (default): pull only files where mtime or size changed.
  *     Emits `trigger:"lazy"` in {@link PullSummary}.
- *   - `mode="seal"`     : pull every device-listed file regardless of cache,
- *     bypassing the mtime equality skip. Used by `stop_session` so the
- *     final bundle never contains a stale tail of an active log.
+ *   - `mode="seal"`     : same freshness predicate, but emits `trigger:"seal"`.
+ *     Used by `stop_session` so the final bundle can pick up an active tail
+ *     without duplicating unchanged lazy pulls.
  *
  * Function shape:
  *   - Pure on top of injected I/O surfaces (`source.listDeviceFiles`,
@@ -76,6 +76,7 @@ export interface PullSummary {
   readonly devicePath: string;
   readonly localPath: string;
   readonly mtimeMs: number;
+  readonly sizeBytes: number;
   /** Why this pull happened — feeds `events.jsonl evidence_pulled.trigger`. */
   readonly trigger: EvidenceRuntimeMode;
 }
@@ -85,6 +86,7 @@ export interface RunStats {
   readonly recordsScanned: number;
   readonly pullsTriggered: number;
   readonly pulledFiles: readonly string[];
+  readonly bytesPulled: number;
 }
 
 export interface SearchEvidenceResult {
@@ -154,6 +156,7 @@ async function runStreamPath(
         recordsScanned: iter.recordsScanned,
         pullsTriggered: pulls.length,
         pulledFiles: pulls.map((p) => p.localPath),
+        bytesPulled: sumPulledBytes(pulls),
       },
     };
   }
@@ -209,6 +212,7 @@ async function runStreamPath(
       recordsScanned: iter.recordsScanned,
       pullsTriggered: pulls.length,
       pulledFiles: pulls.map((p) => p.localPath),
+      bytesPulled: sumPulledBytes(pulls),
     },
   };
 }
@@ -288,6 +292,7 @@ async function runSortPath(
         recordsScanned,
         pullsTriggered: pulls.length,
         pulledFiles: pulls.map((p) => p.localPath),
+        bytesPulled: sumPulledBytes(pulls),
       },
     };
   }
@@ -332,6 +337,7 @@ async function runSortPath(
       recordsScanned,
       pullsTriggered: pulls.length,
       pulledFiles: pulls.map((p) => p.localPath),
+      bytesPulled: sumPulledBytes(pulls),
     },
   };
 }
@@ -379,10 +385,8 @@ export async function sealEvidenceSource(input: {
 /**
  * Pull-diff against the mtime cache.
  *
- *   - lazy: pull when (no cache entry) OR (device mtime > cached mtime).
- *           Equal mtime = frozen file = skip.
- *   - seal: pull every listed file regardless of cache. The cache is still
- *           updated so a subsequent lazy call sees the seal-pulled mtime.
+ *   - lazy/seal: pull when no cache entry, mtime changed, or size changed.
+ *           Equal mtime + equal size = frozen file = skip.
  *
  * Cache mutation is in-place; caller writes the result once after the loop
  * so a torn write can never leave a half-updated cache.
@@ -397,14 +401,22 @@ async function syncDevicePulls(
   const dir = sourceEvidenceDir(input.runDir, input.source.id);
   for (const f of deviceFiles) {
     const cached = cache[f.path];
-    const isFrozen = cached !== undefined && cached.mtimeMs >= f.mtimeMs;
-    if (mode === "lazy" && isFrozen) continue;
+    const unchanged =
+      cached !== undefined &&
+      cached.mtimeMs === f.mtimeMs &&
+      (f.sizeBytes === undefined || cached.sizeBytes === f.sizeBytes);
+    if (unchanged) continue;
     const localPath = join(dir, f.name);
     await input.source.pullFile(input.ctx, f, localPath);
-    cache[f.path] = { mtimeMs: f.mtimeMs, localPath };
-    out.push({ devicePath: f.path, localPath, mtimeMs: f.mtimeMs, trigger: mode });
+    const sizeBytes = f.sizeBytes ?? (await stat(localPath)).size;
+    cache[f.path] = { mtimeMs: f.mtimeMs, localPath, sizeBytes };
+    out.push({ devicePath: f.path, localPath, mtimeMs: f.mtimeMs, sizeBytes, trigger: mode });
   }
   return out;
+}
+
+function sumPulledBytes(pulls: readonly PullSummary[]): number {
+  return pulls.reduce((sum, p) => sum + p.sizeBytes, 0);
 }
 
 interface IterateInput {

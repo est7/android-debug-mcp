@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseExitInfo,
+  parsePackageVersion,
   parsePidList,
   parsePsForPackage,
   parseResumedActivity,
@@ -72,5 +73,45 @@ describe("parseExitInfo", () => {
 
   it("returns empty for output without exit-info (older Android)", () => {
     expect(parseExitInfo("Unknown command: exit-info")).toEqual([]);
+  });
+});
+
+describe("parsePackageVersion", () => {
+  it("prefers the exact Package [name] block", () => {
+    const dump = [
+      "Package [com.other.app] (abc):",
+      "  versionCode=111 minSdk=23 targetSdk=35",
+      "  versionName=stale",
+      "Package [com.baitu.poppo] (def):",
+      "  versionCode=702002 minSdk=23 targetSdk=35",
+      "  versionName=7.2.2",
+    ].join("\n");
+    expect(parsePackageVersion(dump, "com.baitu.poppo")).toEqual({
+      versionName: "7.2.2",
+      versionCode: "702002",
+    });
+  });
+
+  it("falls back to the sole version pair when the exact block is absent", () => {
+    const dump = ["  versionCode=702002 minSdk=23 targetSdk=35", "  versionName=7.2.2"].join("\n");
+    expect(parsePackageVersion(dump, "com.baitu.poppo")).toEqual({
+      versionName: "7.2.2",
+      versionCode: "702002",
+    });
+  });
+
+  it("returns nulls when the exact block is absent and multiple version pairs exist", () => {
+    const dump = [
+      "Package [com.other.one] (abc):",
+      "  versionCode=111",
+      "  versionName=one",
+      "Package [com.other.two] (def):",
+      "  versionCode=222",
+      "  versionName=two",
+    ].join("\n");
+    expect(parsePackageVersion(dump, "com.baitu.poppo")).toEqual({
+      versionName: null,
+      versionCode: null,
+    });
   });
 });

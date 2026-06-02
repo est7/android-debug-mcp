@@ -135,6 +135,8 @@ async function sealAllSources(session: Session): Promise<void> {
             source: source.id,
             trigger: "seal",
             files: pulls.map((p) => basename(p.localPath)),
+            bytesPulled: pulls.reduce((sum, p) => sum + p.sizeBytes, 0),
+            fileBytes: pulls.map((p) => ({ file: basename(p.localPath), bytes: p.sizeBytes })),
           })
           .catch((err) => {
             log.warn("evidence_pulled (seal) append failed; continuing teardown", {

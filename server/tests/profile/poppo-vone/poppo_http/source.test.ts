@@ -213,6 +213,17 @@ describe("poppoHttpSource — validateNarrowingFilter (v0.4.0 Block A)", () => {
     expect(isNarrowing({ source: "poppo_http", excludeHeartbeat: true })).not.toBeNull();
   });
 
+  it('pathPrefix:"/" alone is NOT narrowing, but extract_evidence_context tsMsRange makes it valid', () => {
+    expect(isNarrowing({ source: "poppo_http", pathPrefix: "/" })).not.toBeNull();
+    expect(
+      isNarrowing({
+        source: "poppo_http",
+        pathPrefix: "/",
+        tsMsRange: { from: 0, to: 60_000 },
+      }),
+    ).toBeNull();
+  });
+
   it.each<[string, Record<string, unknown>]>([
     ["pathPrefix", { source: "poppo_http", pathPrefix: "/api" }],
     ["methodIn", { source: "poppo_http", methodIn: ["GET"] }],

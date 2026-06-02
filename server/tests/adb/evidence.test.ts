@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { pullFile, statMtimeMs } from "../../src/adb/evidence.ts";
+import { pullFile, statDeviceFile, statMtimeMs } from "../../src/adb/evidence.ts";
 
 // Mock the adb wrapper so these tests run hermetically — no real device.
 const runAdbMock = vi.fn();
@@ -90,6 +90,48 @@ describe("statMtimeMs", () => {
     runAdbMock.mockResolvedValueOnce({ args: [], stdout: "1\n", stderr: "", exitCode: 0 });
     await statMtimeMs("DEV0", "/x", { timeoutMs: 100 });
     expect(runAdbMock.mock.calls[0]?.[1]).toMatchObject({ timeoutMs: 100, allowNonZero: true });
+  });
+});
+
+describe("statDeviceFile", () => {
+  it("parses mtime seconds and byte size from one stat call", async () => {
+    runAdbMock.mockResolvedValueOnce({
+      args: [],
+      stdout: "1716678000:12345\n",
+      stderr: "",
+      exitCode: 0,
+    });
+    const got = await statDeviceFile("DEV0", "/sdcard/x.jsonl");
+    expect(got).toEqual({ mtimeMs: 1716678000 * 1000, sizeBytes: 12345 });
+    expect(runAdbMock.mock.calls[0]?.[0]).toEqual([
+      "-s",
+      "DEV0",
+      "shell",
+      "stat",
+      "-c",
+      "%Y:%s",
+      "/sdcard/x.jsonl",
+    ]);
+  });
+
+  it("returns null for missing files", async () => {
+    runAdbMock.mockResolvedValueOnce({
+      args: [],
+      stdout: "",
+      stderr: "stat: '/missing': No such file or directory\n",
+      exitCode: 1,
+    });
+    expect(await statDeviceFile("DEV0", "/missing")).toBeNull();
+  });
+
+  it("throws when size is unparseable", async () => {
+    runAdbMock.mockResolvedValueOnce({
+      args: [],
+      stdout: "1716678000 nope\n",
+      stderr: "",
+      exitCode: 0,
+    });
+    await expect(statDeviceFile("DEV0", "/sdcard/x")).rejects.toThrow(/unparseable size/);
   });
 });
 

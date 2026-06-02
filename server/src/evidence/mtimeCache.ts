@@ -31,6 +31,8 @@ const MtimeCacheEntrySchema = z
   .object({
     /** mtime in epoch ms, as recorded after a successful pull. */
     mtimeMs: z.number().int().nonnegative(),
+    /** Device/local byte size observed for the pulled file. Absent in older caches. */
+    sizeBytes: z.number().int().nonnegative().optional(),
     /** Absolute local path where the puller wrote the file. */
     localPath: z.string().min(1),
   })

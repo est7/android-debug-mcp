@@ -30,6 +30,11 @@ export interface StatMtimeOptions {
   readonly timeoutMs?: number;
 }
 
+export interface DeviceFileStat {
+  readonly mtimeMs: number;
+  readonly sizeBytes: number;
+}
+
 /**
  * Return mtime in epoch ms for `devicePath`, or `null` when the file does not
  * exist. Built on `adb shell stat -c %Y <path>` which prints epoch SECONDS on
@@ -78,6 +83,48 @@ export async function statMtimeMs(
     );
   }
   return seconds * 1000;
+}
+
+/**
+ * Return mtime + byte size for `devicePath`, or `null` when the file does not
+ * exist. Uses one stat process so evidence pull planning can compare both
+ * freshness dimensions without doubling adb round-trips.
+ */
+export async function statDeviceFile(
+  deviceSerial: string,
+  devicePath: string,
+  opts: StatMtimeOptions = {},
+): Promise<DeviceFileStat | null> {
+  const res = await runAdb(["-s", deviceSerial, "shell", "stat", "-c", "%Y:%s", devicePath], {
+    timeoutMs: opts.timeoutMs ?? STAT_TIMEOUT_MS,
+    allowNonZero: true,
+  });
+
+  const stdoutTrim = res.stdout.trim();
+  if (res.exitCode !== 0) {
+    if (looksLikeMissingFile(res.stderr)) return null;
+    throw new Error(
+      `adb shell stat -c %Y:%s ${devicePath} exited ${res.exitCode}: ${
+        res.stderr.trim() || res.stdout.trim() || "<no output>"
+      }`,
+    );
+  }
+  if (stdoutTrim === "") return null;
+
+  const [secondsRaw, sizeRaw] = stdoutTrim.split(/[:\s]+/, 2);
+  const seconds = Number.parseInt(secondsRaw ?? "", 10);
+  const sizeBytes = Number.parseInt(sizeRaw ?? "", 10);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    throw new Error(
+      `adb shell stat -c %Y:%s ${devicePath} returned unparseable mtime: "${stdoutTrim}"`,
+    );
+  }
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) {
+    throw new Error(
+      `adb shell stat -c %Y:%s ${devicePath} returned unparseable size: "${stdoutTrim}"`,
+    );
+  }
+  return { mtimeMs: seconds * 1000, sizeBytes };
 }
 
 function looksLikeMissingFile(stderr: string): boolean {

@@ -143,6 +143,7 @@ const statsRunSchema = z
     recordsScanned: z.number().int(),
     pullsTriggered: z.number().int(),
     pulledFiles: z.array(z.string()),
+    bytesPulled: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -162,7 +163,7 @@ const description = [
   "",
   "Use when: the agent has an interesting event (mark, crash, evidence_pulled) and wants the source's records inside the window around it.",
   'Args: `runId`; `markerIsoTs` (the `ts` field copied verbatim from a prior event); `beforeMs` / `afterMs` (0-60000, default 5000); exactly one of `query` or `sources`. `query` is the single-source, paginated path (must carry `source: <sourceId>` — same shape as `search_evidence.query`, minus any `tsMsRange` field; this tool injects a bounded `tsMsRange:{from,to}` from the marker). `sources` is the multi-source timeline path: an array of source-specific queries, each without `tsMsRange`; records are merged by `tsMs` into a digest sequence. `sources` accepts profile evidence sources plus pseudo-sources `logcat` and `events`. `logcat` requires at least one positive narrowing filter (`query`, `level`, `tags`, or `pids`); if the run has no device timezone, it contributes no records and returns warning `logcat timeline unavailable: device timezone unknown`. Profile-declared noisy tags are excluded by default unless an explicit positive `tags` filter is supplied. Messages are redacted on output. `events` supports `typeIn`; `crash` events carry `ref:"crash#<index>"` for `extract_crash_context`, and `evidence_pulled` is suppressed unless explicitly requested by `typeIn`. `limit` (1-500, default 100); `cursor` (single-source `query` path only); `fields` (default digest; for `poppo_http` opt into sections: request.headers|request.params|request.body|request.decoded|response.headers|response.body); `fullRecords` (default `false`; pass `true` for all sections with body untruncated, still source-redacted, limit capped at 10).',
-  "Multi-source timeline is not paginated: when merged records exceed `limit`, the tool truncates the response and returns warning `multi-source truncated at limit; narrow ts/sources`.",
+  'Multi-source timeline is not paginated: when merged records exceed `limit`, the tool truncates the response and returns warning text that points to `search_logs({count:true, groupBy:"tag"})` for log-volume diagnosis.',
   "Returns: `{records[], warnings?, nextCursor?, statsRun, tsMsRange}`. `tsMsRange` echoes the resolved `{from, to}` window so the agent can verify the math. When the source declares preview, each record carries `record._meta.preview = {truncated, fullSizeBytes, truncatedFields, redactedFields?, available?, sizes?}`. `available/sizes` describe source sections available on that record after redaction. `truncated/truncatedFields` mean size-lossy preview; `redactedFields` means safety masking and is not counted as truncation.",
   "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the session went degraded; `invalid_argument` when `query.tsMsRange` is set (this tool owns that field); `query_malformed` when the source-specific fields fail per-source strict validation OR when `fullRecords:true` is combined with `limit > 10` (paginate instead); `invalid_cursor` for a tampered cursor.",
 ].join("\n");
@@ -173,6 +174,7 @@ function zeroStats(): RunStats {
     recordsScanned: 0,
     pullsTriggered: 0,
     pulledFiles: [],
+    bytesPulled: 0,
   };
 }
 
@@ -182,6 +184,7 @@ function addStats(a: RunStats, b: RunStats): RunStats {
     recordsScanned: a.recordsScanned + b.recordsScanned,
     pullsTriggered: a.pullsTriggered + b.pullsTriggered,
     pulledFiles: [...a.pulledFiles, ...b.pulledFiles],
+    bytesPulled: a.bytesPulled + b.bytesPulled,
   };
 }
 
@@ -208,6 +211,8 @@ async function emitEvidencePulledEvent(
     source: sourceId,
     trigger: pulls[0]?.trigger ?? "lazy",
     files: pulls.map((p) => basename(p.localPath)),
+    bytesPulled: pulls.reduce((sum, p) => sum + p.sizeBytes, 0),
+    fileBytes: pulls.map((p) => ({ file: basename(p.localPath), bytes: p.sizeBytes })),
   });
 }
 
@@ -269,11 +274,17 @@ async function collectLogcatTimeline(input: {
   readonly tsMsRange: { readonly from: number; readonly to: number };
   readonly sessionStartMs: number;
   readonly deviceTimezone: string;
-}): Promise<{ readonly records: Record<string, unknown>[]; readonly stats: RunStats }> {
+  readonly limit: number;
+}): Promise<{
+  readonly records: Record<string, unknown>[];
+  readonly stats: RunStats;
+  readonly truncated: boolean;
+}> {
   const path = join(input.runDir, "logcat.jsonl");
   const filters = logFilters(input.query);
   const records: Record<string, unknown>[] = [];
   let scanned = 0;
+  let current: Record<string, unknown> | null = null;
 
   for await (const { text } of readLinesFrom(path)) {
     scanned++;
@@ -281,26 +292,48 @@ async function collectLogcatTimeline(input: {
     if (entry === null || !logEntryMatches(entry, filters)) continue;
     const tsMs = logcatTsToEpochMs(entry.tsRaw, input.sessionStartMs, input.deviceTimezone);
     if (tsMs === null || tsMs < input.tsMsRange.from || tsMs > input.tsMsRange.to) continue;
-    records.push({
-      source: "logcat",
-      tsMs,
-      level: entry.level,
-      tag: entry.tag,
-      pid: entry.pid,
-      // Egress redaction: logcat.jsonl is raw on disk (decision #6); redact the
-      // full message BEFORE truncating so a secret straddling the cut is caught.
-      message: truncateLogMessage(redactString(entry.message)),
-      rawLineNo: entry.rawLineNo,
-    });
+    // Egress redaction: logcat.jsonl is raw on disk (decision #6); redact the
+    // full message BEFORE truncating so a secret straddling the cut is caught.
+    const sample = truncateLogMessage(redactString(entry.message));
+    const sameGroup =
+      current !== null &&
+      current.level === entry.level &&
+      current.tag === entry.tag &&
+      current.pid === entry.pid;
+    if (!sameGroup) {
+      current = {
+        source: "logcat",
+        tsMs,
+        lastTsMs: tsMs,
+        level: entry.level,
+        tag: entry.tag,
+        ...(entry.pid !== undefined ? { pid: entry.pid } : {}),
+        count: 1,
+        sample,
+        rawLineNoFirst: entry.rawLineNo,
+        rawLineNoLast: entry.rawLineNo,
+      };
+      records.push(current);
+      continue;
+    }
+    const group = current;
+    if (group === null) throw new Error("logcat timeline grouping invariant violated");
+    group.lastTsMs = tsMs;
+    group.count = (group.count as number) + 1;
+    group.rawLineNoLast = entry.rawLineNo;
   }
 
+  const cap = Math.min(25, Math.max(5, Math.floor(input.limit / 4)));
+  const truncated = records.length > cap;
   return {
-    records,
+    records: truncated ? records.slice(0, cap) : records,
+    truncated,
     stats: {
       filesScanned: existsSync(path) ? 1 : 0,
       recordsScanned: scanned,
       pullsTriggered: 0,
       pulledFiles: [],
+      bytesPulled: 0,
     },
   };
 }
@@ -379,6 +412,7 @@ async function collectEventsTimeline(input: {
       recordsScanned: scanned,
       pullsTriggered: 0,
       pulledFiles: [],
+      bytesPulled: 0,
     },
   };
 }
@@ -495,8 +529,15 @@ export function registerExtractEvidenceContext(server: McpServer, manager: Sessi
               tsMsRange,
               sessionStartMs: ctx.sessionStartMs,
               deviceTimezone: ctx.deviceTimezone,
+              limit: input.limit,
             });
             stats = addStats(stats, result.stats);
+            if (result.truncated) {
+              pushWarning(
+                warnings,
+                'logcat timeline truncated before merge; narrow logcat filters or inspect tags with search_logs({count:true, groupBy:"tag"})',
+              );
+            }
             records.push(...result.records);
             continue;
           }
@@ -554,7 +595,10 @@ export function registerExtractEvidenceContext(server: McpServer, manager: Sessi
         }
         const responseRecords = records.slice(0, input.limit);
         if (truncated) {
-          pushWarning(warnings, "multi-source truncated at limit; narrow ts/sources");
+          pushWarning(
+            warnings,
+            'multi-source truncated at limit; narrow ts/sources or inspect log volume with search_logs({count:true, groupBy:"tag"})',
+          );
         }
 
         const previewAudit = computePreviewAudit(responseRecords, fullRecords);
@@ -563,6 +607,7 @@ export function registerExtractEvidenceContext(server: McpServer, manager: Sessi
           statsRun: stats,
           pullsTriggered: stats.pullsTriggered,
           pulledFiles: stats.pulledFiles.map((p) => basename(p)),
+          bytesPulled: stats.bytesPulled,
           fullRecords: previewAudit.fullRecords,
           truncatedRecords: previewAudit.truncatedRecords,
           truncatedFullBytesSum: previewAudit.truncatedFullBytesSum,
@@ -595,6 +640,7 @@ export function registerExtractEvidenceContext(server: McpServer, manager: Sessi
           recordsScanned: 0,
           pullsTriggered: 0,
           pulledFiles: [] as string[],
+          bytesPulled: 0,
         };
         await session.appendCommand({
           tool: "extract_evidence_context",

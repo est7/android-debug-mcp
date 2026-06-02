@@ -496,11 +496,16 @@ describe("search_evidence — happy path", () => {
     expect(stats.pulledFiles).toEqual([
       join(sourceEvidenceDir(runDir, "fake_src"), "http_a.jsonl"),
     ]);
+    expect((sc.statsRun as { bytesPulled: number }).bytesPulled).toBe(
+      Buffer.byteLength(fakeBytes["/d/http_a.jsonl"] as string, "utf8"),
+    );
 
     const eventsText = readFileSync(join(runDir, "events.jsonl"), "utf8");
     expect(eventsText).toContain("evidence_pulled");
     expect(eventsText).toContain(`"source":"fake_src"`);
     expect(eventsText).toContain(`"trigger":"lazy"`);
+    expect(eventsText).toContain(`"bytesPulled":`);
+    expect(eventsText).toContain(`"fileBytes":`);
   });
 
   it("second call (cache hit): no pull, no new evidence_pulled event, commands row appended", async () => {
@@ -678,7 +683,9 @@ describe("extract_evidence_context", () => {
     const sc = structured(r);
     expect(sc.tsMsRange).toEqual({ from: 1716600000500, to: 1716600001000 });
     expect(sc.nextCursor).toBeUndefined();
-    expect(sc.warnings).toEqual(["multi-source truncated at limit; narrow ts/sources"]);
+    expect(sc.warnings).toEqual([
+      'multi-source truncated at limit; narrow ts/sources or inspect log volume with search_logs({count:true, groupBy:"tag"})',
+    ]);
     expect(sc.statsRun).toMatchObject({
       filesScanned: 2,
       recordsScanned: 6,
@@ -733,7 +740,7 @@ describe("extract_evidence_context", () => {
       type?: string;
       label?: string;
       level?: string;
-      rawLineNo?: number;
+      rawLineNoFirst?: number;
       ref?: string;
     }>;
     expect(
@@ -747,8 +754,9 @@ describe("extract_evidence_context", () => {
       ["logcat", UNIFIED_BASE_MS + 450, "E"],
     ]);
     expect(records.find((rec) => rec.source === "logcat")).toMatchObject({
-      rawLineNo: 10,
+      rawLineNoFirst: 10,
       level: "W",
+      count: 1,
     });
     expect(records.find((rec) => rec.source === "events" && rec.type === "crash")).toMatchObject({
       ref: "crash#0",
@@ -795,10 +803,10 @@ describe("extract_evidence_context", () => {
     });
 
     expect(r.isError).toBeFalsy();
-    const records = structured(r).records as Array<{ source: string; message?: string }>;
+    const records = structured(r).records as Array<{ source: string; sample?: string }>;
     const logRec = records.find((rec) => rec.source === "logcat");
     expect(logRec, "logcat row must be present in the window").toBeDefined();
-    const msg = logRec?.message ?? "";
+    const msg = logRec?.sample ?? "";
     expect(msg).not.toContain("9906b772cd3b27a0");
     expect(msg).not.toContain("SECRETSIG");
     expect(msg).not.toContain("37142512");
@@ -864,6 +872,46 @@ describe("extract_evidence_context", () => {
     // Explicit `tags:["http/heart-beat"]` → opts the noisy tag back in.
     const opted = await callWith({ source: "logcat", tags: ["http/heart-beat"] });
     expect(opted).toContain("http/heart-beat");
+  });
+
+  it("caps compact logcat contribution before final timeline merge", async () => {
+    const h = await harness();
+    writeProfileJson(h.projectRoot, UNIFIED_PROFILE_NAME);
+    const { runId, runDir } = await startRun(h);
+    writeFileSync(
+      join(runDir, "logcat.jsonl"),
+      Array.from({ length: 12 }, (_, i) =>
+        JSON.stringify({
+          tsRaw: `05-20 10:15:49.${String(100 + i).padStart(3, "0")}`,
+          rawLineNo: i + 1,
+          buffer: "main",
+          level: "D",
+          tag: `Tag${i}`,
+          pid: 1,
+          tid: 1,
+          message: `line ${i}`,
+        }),
+      ).join("\n"),
+    );
+
+    const r = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(UNIFIED_BASE_MS + 105).toISOString(),
+        beforeMs: 250,
+        afterMs: 250,
+        sources: [{ source: "logcat", level: "D" }],
+        limit: 20,
+      },
+    });
+
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    expect(sc.records as Array<unknown>).toHaveLength(5);
+    expect(sc.warnings).toEqual([
+      'logcat timeline truncated before merge; narrow logcat filters or inspect tags with search_logs({count:true, groupBy:"tag"})',
+    ]);
   });
 
   it("rejects logcat timeline source without a positive narrowing filter", async () => {
@@ -1059,7 +1107,7 @@ describe("stop_session — seal-pull (codex amendment #1)", () => {
     }
   });
 
-  it("seal after a search_evidence: re-pulls (cache bypass) and emits one more event", async () => {
+  it("seal after a search_evidence: unchanged file emits no duplicate seal pull event", async () => {
     const h = await harness();
     const { runId, runDir } = await startRun(h, { withProfile: true });
     await h.client.callTool({
@@ -1078,7 +1126,7 @@ describe("stop_session — seal-pull (codex amendment #1)", () => {
     });
     const after = readFileSync(join(runDir, "events.jsonl"), "utf8");
     const sealCount1 = (after.match(/"trigger":"seal"/g) ?? []).length;
-    expect(sealCount1).toBe(1);
+    expect(sealCount1).toBe(0);
   });
 });
 

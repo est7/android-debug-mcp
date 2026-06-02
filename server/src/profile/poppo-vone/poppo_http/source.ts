@@ -114,7 +114,7 @@ export const poppoHttpSource: EvidenceSource = {
   validateNarrowingFilter(query: EvidenceQuery): string | null {
     const q = query as PoppoHttpQuery;
     const hasPositive =
-      q.pathPrefix !== undefined ||
+      (q.pathPrefix !== undefined && q.pathPrefix !== "/") ||
       q.methodIn !== undefined ||
       q.outcome !== undefined ||
       q.tsMsRange !== undefined ||

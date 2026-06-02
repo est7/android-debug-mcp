@@ -49,12 +49,13 @@ describe("ElementFilterSchema — zod validation", () => {
     expect(ElementFilterSchema.safeParse({ junk: 1 }).success).toBe(false);
   });
 
-  it("accepts the five locked fields", () => {
+  it("accepts the locked fields", () => {
     const ok = ElementFilterSchema.safeParse({
       clickableOnly: true,
       classContains: "Button",
       textContains: "login",
       contentDescContains: "search",
+      resourceIdContains: "bottom_nav",
       inViewport: true,
     });
     expect(ok.success).toBe(true);
@@ -142,6 +143,19 @@ describe("applyElementFilter — single-field filters", () => {
     const textOnly = applyElementFilter(elements, { textContains: "search" }, VIEWPORT);
     expect(textOnly).toHaveLength(1);
     expect(textOnly[0]?.text).toBe("Search results");
+  });
+
+  it("resourceIdContains is case-insensitive and skips null resource ids", () => {
+    const elements = [
+      el({ resourceId: "com.example:id/bottom_nav_home" }),
+      el({ resourceId: "com.example:id/BOTTOM_NAV_PROFILE" }),
+      el({ resourceId: null }),
+    ];
+    const out = applyElementFilter(elements, { resourceIdContains: "bottom_nav" }, VIEWPORT);
+    expect(out.map((e) => e.resourceId)).toEqual([
+      "com.example:id/bottom_nav_home",
+      "com.example:id/BOTTOM_NAV_PROFILE",
+    ]);
   });
 });
 

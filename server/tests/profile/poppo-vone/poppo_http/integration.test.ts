@@ -134,6 +134,12 @@ vi.mock("../../../../src/adb/evidence.ts", () => ({
     const entry = deviceFiles.get(devicePath);
     return entry === undefined ? null : entry.mtimeMs;
   },
+  statDeviceFile: async (_deviceSerial: string, devicePath: string) => {
+    const entry = deviceFiles.get(devicePath);
+    return entry === undefined
+      ? null
+      : { mtimeMs: entry.mtimeMs, sizeBytes: Buffer.byteLength(entry.bytes, "utf8") };
+  },
   pullFile: async (_deviceSerial: string, devicePath: string, localPath: string) => {
     const entry = deviceFiles.get(devicePath);
     if (entry === undefined) throw new Error(`mock pullFile: no entry for ${devicePath}`);

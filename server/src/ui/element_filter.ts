@@ -8,10 +8,10 @@
  *
  * Contract surface (recap; see lock for full Q-decisions):
  *
- *   - `ElementFilterSchema` — strict zod object with five optional fields
+ *   - `ElementFilterSchema` — strict zod object with six optional fields
  *     (`clickableOnly` / `classContains` / `textContains` /
- *     `contentDescContains` / `inViewport`). Composed as AND. Substring
- *     fields are case-insensitive (Element.text / contentDesc / class).
+ *     `contentDescContains` / `resourceIdContains` / `inViewport`). Composed
+ *     as AND. Substring fields are case-insensitive.
  *   - `elementLimitSchema` — `z.number().int().min(1).max(500).default(100)`.
  *     **NOT** `.optional()`: `.default(100).optional()` resolves omitted
  *     input to `undefined` instead of 100 (verified locally). Matches
@@ -39,6 +39,7 @@ export const ElementFilterSchema = z
     classContains: z.string().min(1).max(255).optional(),
     textContains: z.string().min(1).max(255).optional(),
     contentDescContains: z.string().min(1).max(255).optional(),
+    resourceIdContains: z.string().min(1).max(255).optional(),
     inViewport: z.boolean().optional(),
   })
   .strict();
@@ -94,6 +95,7 @@ export function applyElementFilter(
   const classNeedle = filter.classContains?.toLowerCase();
   const textNeedle = filter.textContains?.toLowerCase();
   const contentDescNeedle = filter.contentDescContains?.toLowerCase();
+  const resourceIdNeedle = filter.resourceIdContains?.toLowerCase();
   const viewportActive = filter.inViewport === true && viewport !== null;
 
   return elements.filter((el) => {
@@ -105,6 +107,10 @@ export function applyElementFilter(
     }
     if (contentDescNeedle !== undefined) {
       if (el.contentDesc === null || !el.contentDesc.toLowerCase().includes(contentDescNeedle))
+        return false;
+    }
+    if (resourceIdNeedle !== undefined) {
+      if (el.resourceId === null || !el.resourceId.toLowerCase().includes(resourceIdNeedle))
         return false;
     }
     if (viewportActive && !intersectsViewport(el.bounds, viewport as Viewport)) return false;

@@ -25,5 +25,11 @@ export const POPPO_VONE_PROFILE: Profile = {
   // headers, body) into logcat — redundant with the structured `poppo_http` source
   // and voluminous enough to crowd other sources out of a timeline window.
   // Default-excluded from the logcat timeline; an explicit `tags` filter overrides.
-  logcatTimelineExcludeTags: ["http/heart-beat"],
+  logcatTimelineExcludeTags: [
+    "http/heart-beat",
+    "http/response/body",
+    "http/request/param",
+    "StrictMode",
+    "agora.io",
+  ],
 };

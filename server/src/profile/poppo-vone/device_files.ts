@@ -1,5 +1,5 @@
 import { runAdb } from "../../adb/adb.ts";
-import { statMtimeMs } from "../../adb/evidence.ts";
+import { statDeviceFile } from "../../adb/evidence.ts";
 import type { DeviceFileEntry } from "../types.ts";
 
 /**
@@ -74,9 +74,9 @@ async function statCandidates(
   const out: DeviceFileEntry[] = [];
   for (const name of names) {
     const path = `${dir}/${name}`;
-    const mtimeMs = await statMtimeMs(deviceSerial, path);
-    if (mtimeMs === null) continue;
-    out.push({ path, name, mtimeMs });
+    const stat = await statDeviceFile(deviceSerial, path);
+    if (stat === null) continue;
+    out.push({ path, name, mtimeMs: stat.mtimeMs, sizeBytes: stat.sizeBytes });
   }
   return out;
 }

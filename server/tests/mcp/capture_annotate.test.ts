@@ -401,6 +401,26 @@ describe("capture annotateElements (v2-F.1)", () => {
     expect(sc.annotation.elements[0]?.resourceId).toBe("com.x:id/search");
   });
 
+  it("v2-L: filter.resourceIdContains narrows the capture annotation by resource id", async () => {
+    const h = await harness();
+    open.push(() => h.shutdown());
+    const r = await h.client.callTool({
+      name: "android_debug_capture",
+      arguments: {
+        runId: h.runId,
+        kinds: ["screenshot"],
+        annotateElements: true,
+        filter: { resourceIdContains: ":id/search" },
+      },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r) as {
+      annotation: { elements: Array<{ resourceId: string }>; filteredCount: number };
+    };
+    expect(sc.annotation.filteredCount).toBe(1);
+    expect(sc.annotation.elements[0]?.resourceId).toBe("com.x:id/search");
+  });
+
   it("v2-F.3: limit truncates post-filter; annotation.truncated:true + filteredCount > elementCount", async () => {
     const h = await harness();
     open.push(() => h.shutdown());

@@ -57,9 +57,12 @@ export interface EvidenceContext {
 /**
  * One device-side file the source has identified as a candidate for pulling.
  * `mtimeMs` comes from `adb shell stat -c %Y` (multiplied to ms) and drives the
- * mtime cache lookup. `parsedDate` is deliberately absent — date parsing is
- * source-specific (Poppo HTTP log filenames carry `yyyy-MM-dd`; other sources
- * may not), so the source impl derives it internally as it pleases.
+ * mtime cache lookup. `sizeBytes` comes from the same stat pass when available
+ * and lets the runtime avoid a seal re-pull when mtime is unchanged but still
+ * audit actual bytes pulled. `parsedDate` is deliberately absent — date
+ * parsing is source-specific (Poppo HTTP log filenames carry `yyyy-MM-dd`;
+ * other sources may not), so the source impl derives it internally as it
+ * pleases.
  */
 export interface DeviceFileEntry {
   /** Absolute device path, e.g. `/sdcard/Android/data/<pkg>/files/http-logs/http_2026-05-26_0.jsonl`. */
@@ -68,6 +71,8 @@ export interface DeviceFileEntry {
   readonly name: string;
   /** mtime in epoch ms. Drives `runDir/evidence/<id>/.mtime-cache.json` hit/miss. */
   readonly mtimeMs: number;
+  /** Device-side byte size when the source can stat it. Optional for custom/test sources. */
+  readonly sizeBytes?: number;
 }
 
 /**

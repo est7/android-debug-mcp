@@ -86,9 +86,7 @@ export async function getPackageVersion(
     { timeoutMs: 10_000, allowNonZero: true },
   );
   if (res.exitCode !== 0) return { versionName: null, versionCode: null };
-  const versionName = /\bversionName=([^\s]+)/.exec(res.stdout)?.[1] ?? null;
-  const versionCode = /\bversionCode=(\d+)/.exec(res.stdout)?.[1] ?? null;
-  return { versionName, versionCode };
+  return parsePackageVersion(res.stdout, packageName);
 }
 
 /**
@@ -333,6 +331,71 @@ export function parseExitInfo(stdout: string): ExitInfoEntry[] {
     });
   }
   return out;
+}
+
+export function parsePackageVersion(stdout: string, packageName: string): PackageVersion {
+  const blocks = parsePackageBlocks(stdout);
+  const exact = blocks.find((b) => b.packageName === packageName);
+  if (exact !== undefined) return parseVersionPair(exact.text);
+
+  const pairs = collectVersionPairs(stdout);
+  if (pairs.length !== 1) return { versionName: null, versionCode: null };
+  return pairs[0] as PackageVersion;
+}
+
+function parsePackageBlocks(
+  stdout: string,
+): Array<{ readonly packageName: string; readonly text: string }> {
+  const lines = stdout.split(/\r?\n/);
+  const blocks: Array<{ packageName: string; text: string }> = [];
+  let currentName: string | null = null;
+  let currentLines: string[] = [];
+  for (const line of lines) {
+    const match = /^\s*Package \[([^\]]+)]/.exec(line);
+    if (match !== null) {
+      if (currentName !== null) {
+        blocks.push({ packageName: currentName, text: currentLines.join("\n") });
+      }
+      currentName = match[1] as string;
+      currentLines = [line];
+      continue;
+    }
+    if (currentName !== null) currentLines.push(line);
+  }
+  if (currentName !== null) {
+    blocks.push({ packageName: currentName, text: currentLines.join("\n") });
+  }
+  return blocks;
+}
+
+function collectVersionPairs(stdout: string): PackageVersion[] {
+  const out: PackageVersion[] = [];
+  const lines = stdout.split(/\r?\n/);
+  const isVersionLine = (text: string): boolean => /\bversion(?:Name|Code)=/.test(text);
+  // Group maximal runs of consecutive version-bearing lines into one logical
+  // pair. A non-version line (e.g. a `Package [...]` header) ends the run, so
+  // two adjacent declarations of the SAME package collapse to one pair while
+  // distinct blocks stay separate — the count is what the fallback rule keys on.
+  let i = 0;
+  while (i < lines.length) {
+    if (!isVersionLine(lines[i] ?? "")) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < lines.length && isVersionLine(lines[j] ?? "")) j++;
+    const pair = parseVersionPair(lines.slice(i, j).join("\n"));
+    if (pair.versionName !== null || pair.versionCode !== null) out.push(pair);
+    i = j;
+  }
+  return out;
+}
+
+function parseVersionPair(text: string): PackageVersion {
+  return {
+    versionName: /\bversionName=([^\s]+)/.exec(text)?.[1] ?? null,
+    versionCode: /\bversionCode=(\d+)/.exec(text)?.[1] ?? null,
+  };
 }
 
 function firstLine(text: string): string {

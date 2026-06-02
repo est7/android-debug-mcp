@@ -152,6 +152,9 @@ describe("searchEvidence — lazy pull diff", () => {
     expect(out.statsRun.filesScanned).toBe(1);
     expect(out.statsRun.recordsScanned).toBe(2);
     expect(out.statsRun.pullsTriggered).toBe(1);
+    expect(out.statsRun.bytesPulled).toBe(
+      Buffer.byteLength("1716600000000|/api/v1/users\n1716600001000|/api/v1/orders\n", "utf8"),
+    );
     expect(out.nextCursor).toBeNull();
 
     const cache = await readMtimeCache(runDir, "fake_src");
@@ -227,10 +230,49 @@ describe("searchEvidence — lazy pull diff", () => {
     const cache = await readMtimeCache(runDir, "fake_src");
     expect(cache["/d/a.jsonl"]?.mtimeMs).toBe(200);
   });
+
+  it("active file with same mtime but changed size re-pulls and updates cache", async () => {
+    const pulls: Array<{ devicePath: string; localPath: string }> = [];
+    const source = makeFakeSource({
+      files: [{ path: "/d/a.jsonl", name: "a.jsonl", mtimeMs: 100, sizeBytes: 5 }],
+      bytes: { "/d/a.jsonl": "1|/x\n" },
+      pulls,
+    });
+
+    await searchEvidence({
+      source,
+      parsedQuery: { source: "fake_src" } as EvidenceQuery,
+      ctx,
+      runId: "run-1",
+      runDir,
+      limit: 100,
+      cursor: null,
+    });
+    expect(pulls.length).toBe(1);
+
+    const source2 = makeFakeSource({
+      files: [{ path: "/d/a.jsonl", name: "a.jsonl", mtimeMs: 100, sizeBytes: 10 }],
+      bytes: { "/d/a.jsonl": "1|/x\n2|/y\n" },
+      pulls,
+    });
+    const out = await searchEvidence({
+      source: source2,
+      parsedQuery: { source: "fake_src" } as EvidenceQuery,
+      ctx,
+      runId: "run-1",
+      runDir,
+      limit: 100,
+      cursor: null,
+    });
+    expect(pulls.length).toBe(2);
+    expect(out.pulls[0]?.sizeBytes).toBe(10);
+    expect(out.statsRun.bytesPulled).toBe(10);
+    expect((await readMtimeCache(runDir, "fake_src"))["/d/a.jsonl"]?.sizeBytes).toBe(10);
+  });
 });
 
 describe("searchEvidence — seal mode (codex amendment #1)", () => {
-  it("seal: pulls every listed file regardless of cache match", async () => {
+  it("seal: skips a file when mtime and size are unchanged", async () => {
     const pulls: Array<{ devicePath: string; localPath: string }> = [];
     const source = makeFakeSource({
       files: [{ path: "/d/a.jsonl", name: "a.jsonl", mtimeMs: 100 }],
@@ -258,7 +300,43 @@ describe("searchEvidence — seal mode (codex amendment #1)", () => {
       cursor: null,
       mode: "seal",
     });
-    expect(pulls.length).toBe(2); // pulled again despite mtime equality
+    expect(pulls.length).toBe(1);
+    expect(out.pulls).toEqual([]);
+  });
+
+  it("seal: pulls when size changed even if mtime is unchanged", async () => {
+    const pulls: Array<{ devicePath: string; localPath: string }> = [];
+    const source = makeFakeSource({
+      files: [{ path: "/d/a.jsonl", name: "a.jsonl", mtimeMs: 100, sizeBytes: 5 }],
+      bytes: { "/d/a.jsonl": "1|/x\n" },
+      pulls,
+    });
+    await searchEvidence({
+      source,
+      parsedQuery: { source: "fake_src" } as EvidenceQuery,
+      ctx,
+      runId: "run-1",
+      runDir,
+      limit: 100,
+      cursor: null,
+    });
+
+    const source2 = makeFakeSource({
+      files: [{ path: "/d/a.jsonl", name: "a.jsonl", mtimeMs: 100, sizeBytes: 10 }],
+      bytes: { "/d/a.jsonl": "1|/x\n2|/y\n" },
+      pulls,
+    });
+    const out = await searchEvidence({
+      source: source2,
+      parsedQuery: { source: "fake_src" } as EvidenceQuery,
+      ctx,
+      runId: "run-1",
+      runDir,
+      limit: 100,
+      cursor: null,
+      mode: "seal",
+    });
+    expect(pulls.length).toBe(2);
     expect(out.pulls[0]?.trigger).toBe("seal");
   });
 });

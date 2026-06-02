@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runAdb } from "../../../../src/adb/adb.ts";
-import { statMtimeMs } from "../../../../src/adb/evidence.ts";
+import { statDeviceFile } from "../../../../src/adb/evidence.ts";
 import {
   matchPoppoNavRecord,
   poppoNavSource,
@@ -17,7 +17,7 @@ vi.mock("../../../../src/adb/adb.ts", () => ({
 }));
 
 vi.mock("../../../../src/adb/evidence.ts", () => ({
-  statMtimeMs: vi.fn(),
+  statDeviceFile: vi.fn(),
   pullFile: vi.fn(),
 }));
 
@@ -162,8 +162,8 @@ describe("poppo_nav source", () => {
       stderr: "",
       exitCode: 0,
     });
-    vi.mocked(statMtimeMs).mockImplementation(async (_serial, path) =>
-      path.endsWith("_1.jsonl") ? null : 1_779_000_000_000,
+    vi.mocked(statDeviceFile).mockImplementation(async (_serial, path) =>
+      path.endsWith("_1.jsonl") ? null : { mtimeMs: 1_779_000_000_000, sizeBytes: 123 },
     );
 
     const files = await poppoNavSource.listDeviceFiles(CTX);
@@ -184,6 +184,7 @@ describe("poppo_nav source", () => {
         path: "/sdcard/Android/data/com.baitu.poppo/files/nav-logs/nav_2026-05-26_0.jsonl",
         name: "nav_2026-05-26_0.jsonl",
         mtimeMs: 1_779_000_000_000,
+        sizeBytes: 123,
       },
     ]);
   });

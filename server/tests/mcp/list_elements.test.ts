@@ -303,6 +303,22 @@ describe("android_debug_list_elements", () => {
     expect(elements[0]?.resourceId).toBe("com.example.elist:id/search");
   });
 
+  it("filter.resourceIdContains narrows by resource id without fetching every clickable element", async () => {
+    const h = await harness();
+    const { runId } = await startRun(h);
+    vi.mocked(captureUiDump).mockResolvedValue({ ok: true, xml: XML_THREE_BUTTONS, detail: "ok" });
+
+    const r = await h.client.callTool({
+      name: "android_debug_list_elements",
+      arguments: { runId, filter: { resourceIdContains: ":id/search" } },
+    });
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    expect(sc.filteredCount).toBe(1);
+    const elements = sc.elements as Array<Record<string, unknown>>;
+    expect(elements[0]?.resourceId).toBe("com.example.elist:id/search");
+  });
+
   it("limit truncates post-filter; truncated:true reflects filteredCount > elementCount", async () => {
     const h = await harness();
     const { runId } = await startRun(h);

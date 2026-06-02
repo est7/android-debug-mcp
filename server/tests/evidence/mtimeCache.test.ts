@@ -47,6 +47,7 @@ describe("readMtimeCache", () => {
     await writeMtimeCache(runDir, "poppo_http", {
       "/sdcard/Android/data/com.x/files/http-logs/http_2026-05-26_0.jsonl": {
         mtimeMs: 1716678000_000,
+        sizeBytes: 1234,
         localPath: `${runDir}/evidence/poppo_http/http_2026-05-26_0.jsonl`,
       },
       "/sdcard/Android/data/com.x/files/http-logs/http_2026-05-25_0.jsonl": {
@@ -58,7 +59,23 @@ describe("readMtimeCache", () => {
     expect(Object.keys(cache)).toHaveLength(2);
     expect(cache["/sdcard/Android/data/com.x/files/http-logs/http_2026-05-26_0.jsonl"]).toEqual({
       mtimeMs: 1716678000_000,
+      sizeBytes: 1234,
       localPath: `${runDir}/evidence/poppo_http/http_2026-05-26_0.jsonl`,
+    });
+  });
+
+  it("reads old cache entries that do not carry sizeBytes", async () => {
+    const sourceDir = join(runDir, EVIDENCE_SUBDIR, "poppo_http");
+    mkdirSync(sourceDir, { recursive: true });
+    writeFileSync(
+      join(sourceDir, MTIME_CACHE_FILENAME),
+      JSON.stringify({
+        version: 1,
+        entries: { "/d/old": { mtimeMs: 1, localPath: "/l/old" } },
+      }),
+    );
+    expect(await readMtimeCache(runDir, "poppo_http")).toEqual({
+      "/d/old": { mtimeMs: 1, localPath: "/l/old" },
     });
   });
 
