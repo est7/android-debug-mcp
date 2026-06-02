@@ -1,5 +1,6 @@
-import { mkdir, readdir, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { appendFile, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { createLogger } from "../mcp/log.ts";
 import {
   assertSafeDeviceSerial,
@@ -75,6 +76,7 @@ export async function createRunDir(input: RunFolderInput): Promise<RunFolder> {
   const runDir = runPath(input);
   const artifactsDir = join(runDir, "artifacts");
   await mkdir(artifactsDir, { recursive: true });
+  await ensureRunRootGitignored(input.runRoot);
   const metadata = await writeMetadata(runDir, initialMetadata(input));
   // Best-effort: register in the host-global run-index so cross-runRoot
   // lookups can find this run after it stops (§ 1.1-D backlog). A symlink
@@ -190,6 +192,45 @@ function initialMetadata(input: RunFolderInput): MetadataInput {
     linesParsed: 0,
     crashFound: false,
   };
+}
+
+async function ensureRunRootGitignored(runRoot: string): Promise<void> {
+  const repoRoot = gitTopLevel(runRoot);
+  if (repoRoot === null) return;
+
+  const rel = relative(repoRoot, runRoot);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return;
+
+  const pattern = `${rel.split(sep).join("/")}/`;
+  const gitignorePath = join(repoRoot, ".gitignore");
+  const existing = await readOptionalText(gitignorePath);
+  const hasPattern = existing
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .includes(pattern);
+  if (hasPattern) return;
+
+  const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+  await appendFile(gitignorePath, `${prefix}${pattern}\n`, "utf8");
+}
+
+async function readOptionalText(path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (err) {
+    if ((err as { code?: unknown }).code === "ENOENT") return "";
+    throw err;
+  }
+}
+
+function gitTopLevel(cwd: string): string | null {
+  const result = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+  });
+  if (result.status !== 0) return null;
+  const top = (result.stdout ?? "").trim();
+  return top === "" ? null : top;
 }
 
 async function openStreams(runDir: string): Promise<RunStreams> {

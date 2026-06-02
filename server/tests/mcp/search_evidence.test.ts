@@ -74,6 +74,9 @@ vi.mock("../../src/adb/devices.ts", () => ({
 const devicePropsState = vi.hoisted(() => ({
   timezone: "Asia/Shanghai" as string | null,
 }));
+const appPidsState = vi.hoisted(() => ({
+  pids: [1, 1234] as number[],
+}));
 
 vi.mock("../../src/adb/app.ts", () => ({
   getCurrentUser: async () => 0,
@@ -85,7 +88,7 @@ vi.mock("../../src/adb/app.ts", () => ({
     buildFingerprint: "fp",
     timezone: devicePropsState.timezone,
   }),
-  getAppPids: async () => [],
+  getAppPids: async () => appPidsState.pids,
   getAppUid: async () => "10100",
   launchApp: async () => ({ launched: false, detail: "mock" }),
   getForegroundActivity: async () => ({ activity: "com.example/.Main", foreground: true }),
@@ -341,6 +344,7 @@ beforeEach(() => {
   registerTestProfile(multiProfile);
   registerTestProfile(unifiedProfile);
   devicePropsState.timezone = "Asia/Shanghai";
+  appPidsState.pids = [1, 1234];
 });
 afterEach(async () => {
   for (const h of open.splice(0)) await h.shutdown();
@@ -872,6 +876,213 @@ describe("extract_evidence_context", () => {
     // Explicit `tags:["http/heart-beat"]` → opts the noisy tag back in.
     const opted = await callWith({ source: "logcat", tags: ["http/heart-beat"] });
     expect(opted).toContain("http/heart-beat");
+  });
+
+  it("defaults logcat timeline to the current app pids when caller omits pids", async () => {
+    const h = await harness();
+    appPidsState.pids = [1234];
+    writeProfileJson(h.projectRoot, UNIFIED_PROFILE_NAME);
+    const { runId, runDir } = await startRun(h);
+    writeFileSync(
+      join(runDir, "logcat.jsonl"),
+      [
+        JSON.stringify({
+          tsRaw: "05-20 10:15:49.240",
+          rawLineNo: 1,
+          buffer: "main",
+          level: "D",
+          tag: "system_server_noise",
+          pid: 2079,
+          tid: 1,
+          message: "wifi score update",
+        }),
+        JSON.stringify({
+          tsRaw: "05-20 10:15:49.260",
+          rawLineNo: 2,
+          buffer: "main",
+          level: "D",
+          tag: "Poppo",
+          pid: 1234,
+          tid: 1,
+          message: "screen rendered",
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    const r = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(UNIFIED_BASE_MS + 250).toISOString(),
+        beforeMs: 250,
+        afterMs: 250,
+        sources: [{ source: "logcat", level: "D" }],
+        limit: 10,
+      },
+    });
+
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    expect(sc.warnings).toBeUndefined();
+    expect((sc.records as Array<{ pid?: number; tag?: string }>).map((rec) => rec.tag)).toEqual([
+      "Poppo",
+    ]);
+  });
+
+  it("honors explicit logcat pids instead of the current app-pid default", async () => {
+    const h = await harness();
+    appPidsState.pids = [1234];
+    writeProfileJson(h.projectRoot, UNIFIED_PROFILE_NAME);
+    const { runId, runDir } = await startRun(h);
+    writeFileSync(
+      join(runDir, "logcat.jsonl"),
+      [
+        JSON.stringify({
+          tsRaw: "05-20 10:15:49.240",
+          rawLineNo: 1,
+          buffer: "main",
+          level: "D",
+          tag: "SystemOnly",
+          pid: 2079,
+          tid: 1,
+          message: "system row",
+        }),
+        JSON.stringify({
+          tsRaw: "05-20 10:15:49.260",
+          rawLineNo: 2,
+          buffer: "main",
+          level: "D",
+          tag: "Poppo",
+          pid: 1234,
+          tid: 1,
+          message: "app row",
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    const r = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(UNIFIED_BASE_MS + 250).toISOString(),
+        beforeMs: 250,
+        afterMs: 250,
+        sources: [{ source: "logcat", level: "D", pids: [2079] }],
+        limit: 10,
+      },
+    });
+
+    expect(r.isError).toBeFalsy();
+    expect(
+      (structured(r).records as Array<{ pid?: number; tag?: string }>).map((rec) => rec.tag),
+    ).toEqual(["SystemOnly"]);
+  });
+
+  it("composes logcat pid scoping and explicit tags as AND filters", async () => {
+    const h = await harness();
+    appPidsState.pids = [1234];
+    writeProfileJson(h.projectRoot, UNIFIED_PROFILE_NAME);
+    const { runId, runDir } = await startRun(h);
+    writeFileSync(
+      join(runDir, "logcat.jsonl"),
+      [
+        JSON.stringify({
+          tsRaw: "05-20 10:15:49.240",
+          rawLineNo: 1,
+          buffer: "main",
+          level: "D",
+          tag: "Wanted",
+          pid: 2079,
+          tid: 1,
+          message: "right tag wrong pid",
+        }),
+        JSON.stringify({
+          tsRaw: "05-20 10:15:49.260",
+          rawLineNo: 2,
+          buffer: "main",
+          level: "D",
+          tag: "Other",
+          pid: 1234,
+          tid: 1,
+          message: "right pid wrong tag",
+        }),
+        JSON.stringify({
+          tsRaw: "05-20 10:15:49.270",
+          rawLineNo: 3,
+          buffer: "main",
+          level: "D",
+          tag: "Wanted",
+          pid: 1234,
+          tid: 1,
+          message: "right pid and tag",
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    const r = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(UNIFIED_BASE_MS + 260).toISOString(),
+        beforeMs: 250,
+        afterMs: 250,
+        sources: [{ source: "logcat", tags: ["Wanted"] }],
+        limit: 10,
+      },
+    });
+
+    expect(r.isError).toBeFalsy();
+    expect(
+      (structured(r).records as Array<{ pid?: number; tag?: string }>).map((rec) => [
+        rec.pid,
+        rec.tag,
+      ]),
+    ).toEqual([[1234, "Wanted"]]);
+  });
+
+  it("falls back to unscoped logcat and warns when app pids cannot be resolved", async () => {
+    const h = await harness();
+    appPidsState.pids = [];
+    writeProfileJson(h.projectRoot, UNIFIED_PROFILE_NAME);
+    const { runId, runDir } = await startRun(h);
+    writeFileSync(
+      join(runDir, "logcat.jsonl"),
+      [
+        JSON.stringify({
+          tsRaw: "05-20 10:15:49.240",
+          rawLineNo: 1,
+          buffer: "main",
+          level: "D",
+          tag: "SystemOnly",
+          pid: 2079,
+          tid: 1,
+          message: "system row",
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    const r = await h.client.callTool({
+      name: "android_debug_extract_evidence_context",
+      arguments: {
+        runId,
+        markerIsoTs: new Date(UNIFIED_BASE_MS + 250).toISOString(),
+        beforeMs: 250,
+        afterMs: 250,
+        sources: [{ source: "logcat", level: "D" }],
+        limit: 10,
+      },
+    });
+
+    expect(r.isError).toBeFalsy();
+    const sc = structured(r);
+    expect((sc.records as Array<{ tag?: string }>).map((rec) => rec.tag)).toEqual(["SystemOnly"]);
+    expect(sc.warnings).toEqual([
+      "logcat timeline could not resolve current app pids for com.example.v2g_evidence; falling back to unscoped logcat",
+    ]);
   });
 
   it("caps compact logcat contribution before final timeline merge", async () => {

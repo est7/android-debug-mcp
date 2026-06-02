@@ -23,6 +23,11 @@ export function renderSummary(data: RunData): string {
   );
   out.push(`- **App:** ${m.app.versionName ?? "?"} (build ${m.app.versionCode ?? "?"})`);
   out.push(`- **Git:** ${m.git.sha ?? "?"}${m.git.dirty === true ? " (dirty)" : ""}`);
+  out.push(
+    m.profile === null
+      ? "- **Profile:** none — no project profile loaded; evidence tools will report no provider"
+      : `- **Profile:** ${m.profile.name}`,
+  );
   out.push(`- **User:** u${m.userId}`);
   out.push(`- **Started:** ${m.startedAt}`);
   out.push(`- **Closed:** ${m.closedAt ?? "— (still active)"}`);

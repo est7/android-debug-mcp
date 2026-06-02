@@ -150,6 +150,7 @@ describe("start_session tool — failure paths", () => {
     const sc = (result as { structuredContent?: Record<string, unknown> }).structuredContent;
     expect(sc?.deviceSerial).toBe("FAKEDEV0");
     expect(sc?.versionName).toBe("1.0.0");
+    expect(sc?.profileName).toBeNull();
     expect(h.manager.listActive()).toHaveLength(1);
   });
 
@@ -278,6 +279,8 @@ describe("start_session tool — profile loading (v2-G Phase 1)", () => {
         arguments: { packageName: "com.example.app", projectRoot: repo.dir },
       });
       expect(result.isError).toBeFalsy();
+      const sc = (result as { structuredContent?: Record<string, unknown> }).structuredContent;
+      expect(sc?.profileName).toBeNull();
       const meta = await readMetadata(onlyActive(h.manager).runDir);
       expect(meta.profile).toBeNull();
     } finally {
@@ -295,6 +298,8 @@ describe("start_session tool — profile loading (v2-G Phase 1)", () => {
         arguments: { packageName: "com.example.app", projectRoot: repo.dir },
       });
       expect(result.isError).toBeFalsy();
+      const sc = (result as { structuredContent?: Record<string, unknown> }).structuredContent;
+      expect(sc?.profileName).toBe("poppo-vone");
       const meta = await readMetadata(onlyActive(h.manager).runDir);
       expect(meta.profile).toEqual({ name: "poppo-vone", version: 1 });
     } finally {

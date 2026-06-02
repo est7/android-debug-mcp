@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -100,5 +101,30 @@ describe("createRunDir + runPath", () => {
   it("runPath is pure: no filesystem effects", () => {
     const p = runPath(fixture());
     expect(p).toBe(join(scratch, "com.example.app", "u0", "2026-05-19T10-15-49.821Z_aB3k"));
+  });
+
+  it("ensures repo-local run roots are gitignored once", async () => {
+    execFileSync("git", ["init", "-q", scratch]);
+    const repoRoot = realpathSync(scratch);
+    const runRoot = join(repoRoot, ".android-debug-runs");
+
+    const first = await createRunDir(fixture({ runRoot, runRootSource: "explicit" }));
+    await first.closeStreams();
+    const second = await createRunDir(
+      fixture({
+        runRoot,
+        runRootSource: "explicit",
+        runId: "2026-05-19T10-18-00.000Z_CCCC",
+      }),
+    );
+    await second.closeStreams();
+
+    const gitignore = readFileSync(join(repoRoot, ".gitignore"), "utf8");
+    expect(gitignore.match(/^\.android-debug-runs\/$/gm)).toHaveLength(1);
+    execFileSync("git", ["-C", repoRoot, "check-ignore", ".android-debug-runs"]);
+    const status = execFileSync("git", ["-C", repoRoot, "status", "--short"], {
+      encoding: "utf8",
+    });
+    expect(status).not.toContain(".android-debug-runs");
   });
 });

@@ -42,6 +42,7 @@ const outputSchema = z
     deviceSerial: z.string(),
     userId: z.number().int(),
     packageName: z.string(),
+    profileName: z.string().nullable(),
     pid: z.number().int().nullable(),
     launchDetail: z.string().nullable(),
     versionName: z.string().nullable(),
@@ -55,7 +56,7 @@ const description = [
   "",
   "Use when: the agent is about to debug an app and needs a `runId` to anchor every subsequent tool call.",
   'Args: `packageName` (required); optional `deviceSerial` (auto-picks the sole connected device when omitted), `userId` (number or "current", default "current"), `projectRoot` (for run-root resolution + git provenance), `clearLocalRunLogs`, `clearDeviceLogcat`, `launchOnStart`, `logcatBufferSize`.',
-  "Returns: `{runId, runDir, runRoot, runRootSource, deviceSerial, userId, packageName, pid, launchDetail, versionName, versionCode, clearedRunCount}`. `pid` is null when the app was not launched or the launch failed (the run still starts).",
+  "Returns: `{runId, runDir, runRoot, runRootSource, deviceSerial, userId, packageName, profileName, pid, launchDetail, versionName, versionCode, clearedRunCount}`. `profileName` is null when no project profile was loaded; `pid` is null when the app was not launched or the launch failed (the run still starts).",
   "Errors: `no_device` / `ambiguous_device` / `device_disconnected` for device resolution; `singleton_violation` when this (device,user,package) tuple already has an active session; `invalid_identity` for a malformed packageName; `profile_malformed` when `<projectRoot>/.android-debug-mcp/profile.json` exists but is not valid JSON / fails schema; `profile_unknown` when profile.json names a profile not in the built-in registry; `adb_not_found` / `adb_command_failed` when the adb binary is missing or an adb command fails.",
 ].join("\n");
 
@@ -202,6 +203,7 @@ export function registerStartSession(server: McpServer, manager: SessionManager)
           deviceSerial,
           userId,
           packageName: input.packageName,
+          profileName: loadedProfile === null ? null : loadedProfile.profile.name,
           pid,
           launchDetail,
           versionName: version.versionName,

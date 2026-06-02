@@ -51,6 +51,22 @@ describe("renderSummary", () => {
     expect(md).toContain("abc1234 (dirty)");
   });
 
+  it("surfaces when no project profile was loaded", () => {
+    const md = renderSummary(makeRunData());
+    expect(md).toContain(
+      "**Profile:** none — no project profile loaded; evidence tools will report no provider",
+    );
+  });
+
+  it("surfaces the loaded project profile name", () => {
+    const md = renderSummary(
+      makeRunData({
+        metadata: { ...makeRunData().metadata, profile: { name: "poppo-vone", version: 1 } },
+      }),
+    );
+    expect(md).toContain("**Profile:** poppo-vone");
+  });
+
   it("renders the counts line", () => {
     const md = renderSummary(makeRunData());
     expect(md).toContain("Events 3 · Commands 2 · Logcat lines 50 · Crashes 0");
