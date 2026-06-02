@@ -13,7 +13,7 @@ disk you can inspect, bundle, or hand to a teammate. It deliberately does **not*
 do element-based UI automation (no AccessibilityService, no view-tree tapping) —
 see [Coexisting with mobile-mcp](#coexisting-with-mobile-mcp).
 
-Status: **v2-A (0.3.0)** — 19 tools registered; v1 and v2-A acceptance scenarios pass on-device.
+Status: **0.7.4** — 24 tools registered; v1 + v2 acceptance scenarios and on-device e2e pass.
 
 ## Prerequisites
 
@@ -92,7 +92,7 @@ Set `ANDROID_DEBUG_MCP_INDEX_ROOT` only to move the index off `$HOME` — e.g.
 park it on a different volume, or isolate it per-workspace. Default
 (`~/.android-debug-mcp/run-index/`) is correct for almost all users.
 
-## The 19 tools
+## The 24 tools
 
 Every tool is named `android_debug_*`. On **success** it returns
 `structuredContent`. A recoverable **failure** instead returns
@@ -100,17 +100,57 @@ Every tool is named `android_debug_*`. On **success** it returns
 `content[0].text` and **no** `structuredContent` — the agent branches on that
 payload; it is never raised as a raw protocol error.
 
-| Group | Tools |
-|---|---|
-| **Session lifecycle** | `start_session`, `stop_session`, `mark_event`, `get_app_state`, `app_control`, `clear_app_data` |
-| **Interaction** | `tap`, `input_text`, `send_key`, `swipe`, `capture` |
-| **Evidence retrieval** | `search_logs`, `extract_crash_context`, `get_run_summary` |
-| **Device & run management** | `list_devices`, `list_runs`, `collect_bundle` |
-| **Tap-to-source (v2-A)** | `tap_node`, `map_ui_node_to_source` |
-
 A session is a singleton per `(deviceSerial, userId, packageName)` tuple — one
 active run per app per device. Every interaction/evidence call carries the
 `runId` returned by `start_session`.
+
+### Session lifecycle
+
+| Tool | What it does |
+|---|---|
+| `start_session` | Acquire the singleton lock, materialize the run folder, capture app/device/git provenance, optionally launch. Returns the `runId` every later call carries (+ `versionName`/`versionCode`, `profileName`). |
+| `stop_session` | Finalize the run: seal evidence, flush and close the jsonl streams, release the lock. |
+| `get_app_state` | Live read-only snapshot: foreground activity, pids, installed version, recent `exit-info`, session health. |
+| `get_run_summary` | Full Markdown report + structured metadata for a run — provenance, counts, crash list, event timeline. |
+| `app_control` | Drive app lifecycle for the active session: launch / stop / force-stop / restart. |
+| `clear_app_data` | `pm clear` the app — reset to first-launch state. |
+
+### Devices & runs
+
+| Tool | What it does |
+|---|---|
+| `list_devices` | List adb-visible devices (incl. offline / unauthorized), with model / api-level / abi. |
+| `list_runs` | List debug runs under the run root, newest first, paginated. |
+
+### Screen inspection & interaction
+
+| Tool | What it does |
+|---|---|
+| `capture` | Screenshot and/or UI-hierarchy dump. `annotateElements:true` overlays numbered tap targets and returns the element map. |
+| `list_elements` | List on-screen interactive elements (resource-id / text / desc / bounds + a pre-computed tap center). Filter server-side: `resourceIdContains`, `clickableOnly`, `textContains`, `inViewport`, … |
+| `tap` · `long_press` · `swipe` | Coordinate gestures on the active session. |
+| `tap_node` | Tap a coordinate **and** resolve which node was hit + its nearest resource-id source anchor + ancestor chain — one call. |
+| `send_key` | Send one hardware/navigation key (BACK, HOME, ENTER, …). |
+| `input_text` | Type into the focused field via ADBKeyBoard; `sensitive:true` records only a length placeholder. |
+| `map_ui_node_to_source` | Map a tapped node back to source — layout-id declaration, screen owner, code references. |
+
+### Evidence & forensics
+
+| Tool | What it does |
+|---|---|
+| `mark_event` | Append a named time marker to `events.jsonl` — anchors a point so later retrieval can scope a window around it. |
+| `search_logs` | Search parsed logcat by substring / level / tag / pid / mark-window. `count:true + groupBy` aggregates log volume. |
+| `search_evidence` | Search a profile-declared evidence source (e.g. `poppo_http`), paginated, pulled from the device on demand — with `bytesPulled` cost accounting. |
+| `extract_evidence_context` | Records around a marker: single-source paginated, **or** a multi-source causal timeline merging logcat + events + profile sources by `tsMs` (logcat defaults to the app's pids, noisy tags dropped). |
+| `extract_crash_context` | Raw-log context around a crash recorded in the run. |
+| `perf_snapshot` | Live performance snapshot (cpu / mem / gfx) for the active session. |
+| `collect_bundle` | Package a run folder into a portable bundle — hand to a teammate or attach to a ticket. |
+
+> Profile-scoped tools (`search_evidence`, the profile sources in
+> `extract_evidence_context`) only light up when `start_session` loaded a
+> project profile. Point `projectRoot` at a repo carrying
+> `.android-debug-mcp/profile.json`; otherwise `start_session` returns
+> `profileName: null` and those sources report "no provider".
 
 ## Quickstart — the five scenarios
 
@@ -173,6 +213,119 @@ unfinalized. The next server boot recovers it automatically:
 android_debug_list_runs {}
 //   → the killed run appears with "status": "aborted"
 ```
+
+## Workflows — chaining tools for real debugging needs
+
+The Quickstart shows tools in isolation. In practice an agent **composes** them:
+one tool's output (a `runId`, a marker `ts`, a tapped node, a failing request)
+feeds the next. Below are the chains that map to recurring debugging asks.
+
+### W1 — "Which code draws this control / why does this tap do nothing?"
+
+From a pixel on screen to the owning source.
+
+```jsonc
+android_debug_list_elements    { "runId": "<id>", "filter": { "resourceIdContains": "nav" } }
+//   → narrows ~100 clickables down to the bottom-nav ids (no full-tree dump)
+android_debug_tap_node         { "runId": "<id>", "x": 540, "y": 2288, "label": "tab: Dynamic" }
+//   → { tappedNode, anchorNode, preTapForegroundActivity, ancestorChain }
+android_debug_map_ui_node_to_source {
+  "runId": "<id>",
+  "anchorNode":         <tap_node.anchorNode>,
+  "foregroundActivity": <tap_node.preTapForegroundActivity>,
+  "ancestorChain":      <tap_node.ancestorChain>
+}
+//   → layout-id declaration, screen owner, code references (file:line)
+```
+
+Why this shape: `resourceIdContains` is the cheap selector — you pick the target
+without fetching every element; `tap_node` resolves hit + anchor in one call;
+its result feeds **straight** into `map_ui_node_to_source`, which lands on the
+actual XML/Kotlin. The mapper runs against the recorded run + project source, so
+it works on a finalized run too.
+
+### W2 — "Reproduce a crash, get the stack + scene, hand it off"
+
+```jsonc
+android_debug_start_session    { "packageName": "com.example.app", "clearDeviceLogcat": true, "launchOnStart": true }
+android_debug_mark_event       { "runId": "<id>", "name": "before_repro" }
+//   ... drive the repro: tap / swipe / input_text ...
+android_debug_extract_crash_context { "runId": "<id>", "beforeLines": 30, "afterLines": 60 }
+//   → exception type, top frame, raw-log snippet around the crash
+android_debug_search_logs      { "runId": "<id>", "afterMark": "before_repro", "level": "E" }
+//   → app-side errors leading up to it
+android_debug_collect_bundle   { "runId": "<id>" }
+//   → a portable folder for the ticket / teammate
+```
+
+Why this shape: `clearDeviceLogcat` removes pre-repro noise; the marker anchors
+"when it started"; crash context gives the stack, `search_logs` the lead-up,
+`collect_bundle` the hand-off.
+
+### W3 — "An API errored / a screen is slow — find the exact request + its context"
+
+Profile-driven (Poppo/Vone `poppo_http`). Requires `projectRoot` at a repo with
+`.android-debug-mcp/profile.json`.
+
+```jsonc
+android_debug_start_session    { "packageName": "com.baitu.poppo", "projectRoot": "/path/to/submodulepoppo" }
+//   → profileName: "poppo-vone"  (else null → poppo_http has no provider)
+android_debug_mark_event       { "runId": "<id>", "name": "symptom" }
+//   ... reproduce ...
+android_debug_search_evidence  { "runId": "<id>", "query": { "source": "poppo_http", "outcome": "http_error" } }
+//   or: { "source": "poppo_http", "durationMsGte": 1000, "pathPrefix": "/live" }  → slow calls on a path
+android_debug_extract_evidence_context {
+  "runId": "<id>", "markerIsoTs": "<symptom ts>",
+  "sources": [ { "source": "poppo_http" }, { "source": "logcat" }, { "source": "events" } ]
+}
+//   → the failing request merged with the logcat / nav around it, by tsMs
+```
+
+Why this shape: `search_evidence` filters the haystack by `outcome` /
+`durationMsGte` / `pathPrefix` instead of scrolling logs; the multi-source
+timeline then places that request next to what else happened at that instant.
+`bytesPulled` in `statsRun` tells you what the on-demand pull actually cost.
+
+### W4 — "A timing bug — lay out what happened on one causal line"
+
+```jsonc
+android_debug_mark_event       { "runId": "<id>", "name": "t0" }
+//   ... trigger the sequence ...
+android_debug_extract_evidence_context {
+  "runId": "<id>", "markerIsoTs": "<t0 ts>", "beforeMs": 3000, "afterMs": 8000,
+  "sources": [ { "source": "poppo_nav" }, { "source": "poppo_http" },
+               { "source": "events" }, { "source": "logcat", "level": "W" } ]
+}
+//   → nav + http + UI events + (app-pid-scoped, compacted) logcat, merged by time
+android_debug_search_logs      { "runId": "<id>", "count": true, "groupBy": "tag" }
+//   → if the timeline truncated, find which tag is flooding it
+android_debug_search_logs      { "runId": "<id>", "afterMark": "t0", "tags": ["YourTag"] }
+//   → drill to the raw lines that matter
+```
+
+Why this shape: the timeline gives **signal** — since 0.7.4 logcat defaults to
+the app's own pids and drops profile-declared noisy tags, so OS chatter
+(`system_server`, `systemui`) no longer buries the app's lines. When it
+truncates, `count + groupBy` names the flooder; then you fetch raw lines on
+demand.
+
+### W5 — "Capture perf + compare against a previous run"
+
+```jsonc
+android_debug_mark_event       { "runId": "<id>", "name": "before_scroll" }
+//   ... scroll the list ...
+android_debug_perf_snapshot    { "runId": "<id>", "kinds": ["gfxinfo", "meminfo"] }
+//   → parsed gfxinfo (jank/frame) + meminfo digest
+android_debug_stop_session     { "runId": "<id>" }
+android_debug_list_runs        {}
+//   → pick the baseline run from a previous build
+android_debug_get_run_summary  { "runId": "<baseline>" }
+//   → diff provenance (git sha, app version) + counts + perf between the two
+```
+
+Why this shape: snapshots + markers capture the moment; `list_runs` /
+`get_run_summary` turn "is this worse than last build?" into a side-by-side on
+two folders that each pin their own git/app provenance.
 
 ## Typing text (ADBKeyBoard)
 

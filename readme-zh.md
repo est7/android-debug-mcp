@@ -10,7 +10,7 @@
 可转交同事的目录。它刻意 **不做** 基于元素的 UI 自动化(不碰 AccessibilityService、
 不按控件树点击)——见 [与 mobile-mcp 共存](#与-mobile-mcp-共存)。
 
-状态:**v2-A (0.3.0)** —— 19 个工具全部注册;v1 与 v2-A 的验收场景均真机通过。
+状态:**0.7.4** —— 24 个工具全部注册;v1 + v2 验收场景与真机 e2e 均通过。
 
 ## 前置要求
 
@@ -72,23 +72,62 @@ claude mcp add android-debug -- npx -y github:est7/android-debug-mcp
 `metadata.json`、`events.jsonl`、`commands.jsonl`、`logcat.jsonl`、
 `logcat.raw.txt`、`crash.jsonl`、`summary.md`,以及一个 `artifacts/` 子目录。
 
-## 19 个工具
+## 24 个工具
 
-每个工具都叫 `android_debug_*`,返回 `structuredContent`。工具 **成功** 时返回
-`structuredContent`;**可恢复的失败** 则返回 `{ isError: true }`,把 JSON 形态的
-`{error, message, …}` 放在 `content[0].text` 里、且 **不带** `structuredContent`
-——agent 据此分支处理;它绝不会以裸协议错误的形式抛出。
-
-| 分组 | 工具 |
-|---|---|
-| **会话生命周期** | `start_session`、`stop_session`、`mark_event`、`get_app_state`、`app_control`、`clear_app_data` |
-| **交互** | `tap`、`input_text`、`send_key`、`swipe`、`capture` |
-| **证据检索** | `search_logs`、`extract_crash_context`、`get_run_summary` |
-| **设备与 run 管理** | `list_devices`、`list_runs`、`collect_bundle` |
-| **Tap-to-source(v2-A)** | `tap_node`、`map_ui_node_to_source` |
+每个工具都叫 `android_debug_*`。工具 **成功** 时返回 `structuredContent`;
+**可恢复的失败** 则返回 `{ isError: true }`,把 JSON 形态的 `{error, message, …}`
+放在 `content[0].text` 里、且 **不带** `structuredContent`——agent 据此分支处理;
+它绝不会以裸协议错误的形式抛出。
 
 会话按 `(deviceSerial, userId, packageName)` 三元组单例——一个 app 在一台设备上
 同一时刻只有一个活跃 run。每次交互 / 证据调用都带上 `start_session` 返回的 `runId`。
+
+### 会话生命周期
+
+| 工具 | 作用 |
+|---|---|
+| `start_session` | 拿单例锁、落 run 目录、采集 app/设备/git 溯源,可选拉起 app。返回后续所有调用要带的 `runId`(以及 `versionName`/`versionCode`、`profileName`)。 |
+| `stop_session` | finalize:封存证据、flush 并关闭各 jsonl 流、释放锁。 |
+| `get_app_state` | 只读实时快照:前台 activity、pids、已装版本、近期 `exit-info`、会话健康。 |
+| `get_run_summary` | 一个 run 的完整 Markdown 报告 + 结构化 metadata——溯源、计数、崩溃列表、事件时间线。 |
+| `app_control` | 驱动活跃会话的 app 生命周期:launch / stop / force-stop / restart。 |
+| `clear_app_data` | `pm clear` 抹掉 app 数据,回到首次启动状态。 |
+
+### 设备与 run
+
+| 工具 | 作用 |
+|---|---|
+| `list_devices` | 列 adb 可见设备(含 offline / 未授权),带 model / api-level / abi。 |
+| `list_runs` | 列 run 根目录下的 run,最新在前,分页。 |
+
+### 屏幕检视与交互
+
+| 工具 | 作用 |
+|---|---|
+| `capture` | 截图和/或 UI 层级 dump。`annotateElements:true` 叠加带编号的可点目标并返回元素映射。 |
+| `list_elements` | 列屏上可交互元素(resource-id / 文本 / desc / bounds + 预算好的点击中心)。server 端过滤:`resourceIdContains`、`clickableOnly`、`textContains`、`inViewport` 等。 |
+| `tap` · `long_press` · `swipe` | 活跃会话上的坐标手势。 |
+| `tap_node` | 点一个坐标 **并** 解析命中了哪个节点 + 最近的 resource-id 源锚点 + 祖先链——一次调用搞定。 |
+| `send_key` | 发一个硬件/导航键(BACK、HOME、ENTER…)。 |
+| `input_text` | 经 ADBKeyBoard 往焦点输入框打字;`sensitive:true` 只记长度占位符。 |
+| `map_ui_node_to_source` | 把点中的节点映射回源码——layout-id 声明、所属屏幕、代码引用。 |
+
+### 证据与取证
+
+| 工具 | 作用 |
+|---|---|
+| `mark_event` | 往 `events.jsonl` 追加一个命名时间标记——锚住一个时间点,供后续按窗口取证。 |
+| `search_logs` | 按子串 / level / tag / pid / mark 窗口检索已解析的 logcat。`count:true + groupBy` 做日志量聚合。 |
+| `search_evidence` | 检索 profile 声明的证据源(如 `poppo_http`),分页,按需从设备拉取——带 `bytesPulled` 成本记账。 |
+| `extract_evidence_context` | marker 周围的记录:单源分页,**或** 多源因果时间线,把 logcat + events + profile 源按 `tsMs` 归并(logcat 默认收敛到 app 的 pids、丢掉噪声 tag)。 |
+| `extract_crash_context` | run 里某次崩溃周围的原始日志上下文。 |
+| `perf_snapshot` | 活跃会话的实时性能快照(cpu / mem / gfx)。 |
+| `collect_bundle` | 把 run 目录打成可携带的 bundle——转交同事或附进工单。 |
+
+> profile 相关的工具(`search_evidence`、`extract_evidence_context` 里的 profile
+> 源)只有在 `start_session` 加载了 project profile 时才生效。把 `projectRoot`
+> 指向带 `.android-debug-mcp/profile.json` 的仓库;否则 `start_session` 返回
+> `profileName: null`,这些源会报 "no provider"。
 
 ## 快速上手 —— 五个场景
 
@@ -151,6 +190,113 @@ server 启动会自动恢复它:
 android_debug_list_runs {}
 //   → 被杀的那个 run 以 "status": "aborted" 出现
 ```
+
+## 工作流 —— 把工具串成真实排障链路
+
+快速上手是单个工具的演示。实际排障里 agent 会 **组合** 它们:一个工具的输出
+(`runId`、marker 的 `ts`、点中的节点、一条出错的请求)喂给下一个。下面这些链路
+对应常见的排障诉求。
+
+### W1 —— "这个控件是哪段代码画的 / 点了为什么没反应?"
+
+从屏幕上一个像素,落到拥有它的源码。
+
+```jsonc
+android_debug_list_elements    { "runId": "<id>", "filter": { "resourceIdContains": "nav" } }
+//   → 把上百个 clickable 收敛到底部 nav 那几个 id(不用拉整棵树)
+android_debug_tap_node         { "runId": "<id>", "x": 540, "y": 2288, "label": "tab: Dynamic" }
+//   → { tappedNode, anchorNode, preTapForegroundActivity, ancestorChain }
+android_debug_map_ui_node_to_source {
+  "runId": "<id>",
+  "anchorNode":         <tap_node.anchorNode>,
+  "foregroundActivity": <tap_node.preTapForegroundActivity>,
+  "ancestorChain":      <tap_node.ancestorChain>
+}
+//   → layout-id 声明、所属屏幕、代码引用(file:line)
+```
+
+为什么这么串:`resourceIdContains` 是便宜的选择器,不用拉全部元素就能挑中目标;
+`tap_node` 一次拿到命中 + 锚点;它的结果 **直接** 喂进 `map_ui_node_to_source`,
+落到真正的 XML/Kotlin。mapper 跑在「已记录的 run + 项目源码」上,finalize 过的
+run 也能用。
+
+### W2 —— "复现一个崩溃,拿到堆栈 + 现场,能转交"
+
+```jsonc
+android_debug_start_session    { "packageName": "com.example.app", "clearDeviceLogcat": true, "launchOnStart": true }
+android_debug_mark_event       { "runId": "<id>", "name": "before_repro" }
+//   ... 复现:tap / swipe / input_text ...
+android_debug_extract_crash_context { "runId": "<id>", "beforeLines": 30, "afterLines": 60 }
+//   → 异常类型、top frame、崩溃周围的原始日志片段
+android_debug_search_logs      { "runId": "<id>", "afterMark": "before_repro", "level": "E" }
+//   → 崩溃前的 app 侧报错
+android_debug_collect_bundle   { "runId": "<id>" }
+//   → 一个可塞进工单 / 发给同事的目录
+```
+
+为什么这么串:`clearDeviceLogcat` 去掉复现前的噪声;marker 锚住"从何时开始";
+crash context 给堆栈、`search_logs` 给前因、`collect_bundle` 给转交物。
+
+### W3 —— "某接口报错 / 某页面慢——定位到底是哪一次请求 + 它的上下文"
+
+profile 驱动(Poppo/Vone 的 `poppo_http`)。需要 `projectRoot` 指向带
+`.android-debug-mcp/profile.json` 的仓库。
+
+```jsonc
+android_debug_start_session    { "packageName": "com.baitu.poppo", "projectRoot": "/path/to/submodulepoppo" }
+//   → profileName: "poppo-vone"  (否则 null → poppo_http 没有 provider)
+android_debug_mark_event       { "runId": "<id>", "name": "symptom" }
+//   ... 复现 ...
+android_debug_search_evidence  { "runId": "<id>", "query": { "source": "poppo_http", "outcome": "http_error" } }
+//   或:{ "source": "poppo_http", "durationMsGte": 1000, "pathPrefix": "/live" }  → 某路径上的慢请求
+android_debug_extract_evidence_context {
+  "runId": "<id>", "markerIsoTs": "<symptom 的 ts>",
+  "sources": [ { "source": "poppo_http" }, { "source": "logcat" }, { "source": "events" } ]
+}
+//   → 把那次出错请求和它周围的 logcat / 导航,按 tsMs 并到一起
+```
+
+为什么这么串:`search_evidence` 用 `outcome` / `durationMsGte` / `pathPrefix`
+直接从一堆请求里筛出坏的,而不是翻日志;多源时间线再把这次请求摆到「那一刻还
+发生了什么」旁边。`statsRun` 里的 `bytesPulled` 告诉你这次按需拉取实际花了多少。
+
+### W4 —— "时序 bug:把一段时间内发生的事排成一条因果线"
+
+```jsonc
+android_debug_mark_event       { "runId": "<id>", "name": "t0" }
+//   ... 触发那段时序 ...
+android_debug_extract_evidence_context {
+  "runId": "<id>", "markerIsoTs": "<t0 的 ts>", "beforeMs": 3000, "afterMs": 8000,
+  "sources": [ { "source": "poppo_nav" }, { "source": "poppo_http" },
+               { "source": "events" }, { "source": "logcat", "level": "W" } ]
+}
+//   → nav + http + UI 事件 +(按 app pid 收敛、压缩过的)logcat,按时间并起来
+android_debug_search_logs      { "runId": "<id>", "count": true, "groupBy": "tag" }
+//   → 时间线被截断时,找出是哪个 tag 在刷屏
+android_debug_search_logs      { "runId": "<id>", "afterMark": "t0", "tags": ["YourTag"] }
+//   → 下钻到真正要看的原始行
+```
+
+为什么这么串:时间线给的是 **信号**——0.7.4 起 logcat 默认收敛到 app 自己的
+pids、并丢掉 profile 声明的噪声 tag,`system_server` / `systemui` 那些 OS 噪声
+不再把 app 的行淹掉。截断时 `count + groupBy` 点名刷屏者,再按需取原始行。
+
+### W5 —— "采性能 + 跟上一个 run 对比"
+
+```jsonc
+android_debug_mark_event       { "runId": "<id>", "name": "before_scroll" }
+//   ... 滚列表 ...
+android_debug_perf_snapshot    { "runId": "<id>", "kinds": ["gfxinfo", "meminfo"] }
+//   → 解析后的 gfxinfo(jank/帧)+ meminfo 摘要
+android_debug_stop_session     { "runId": "<id>" }
+android_debug_list_runs        {}
+//   → 挑出上一个构建的基线 run
+android_debug_get_run_summary  { "runId": "<baseline>" }
+//   → 在两个 run 之间对比溯源(git sha、app 版本)+ 计数 + 性能
+```
+
+为什么这么串:快照 + marker 抓住当下;`list_runs` / `get_run_summary` 把"这次比
+上个构建差吗"变成两个各自钉死 git/app 溯源的目录之间的并排对比。
 
 ## 文本输入(ADBKeyBoard)
 
