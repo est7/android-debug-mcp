@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { appendFile, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createLogger } from "../mcp/log.ts";
 import {
@@ -198,7 +198,15 @@ async function ensureRunRootGitignored(runRoot: string): Promise<void> {
   const repoRoot = gitTopLevel(runRoot);
   if (repoRoot === null) return;
 
-  const rel = relative(repoRoot, runRoot);
+  // Normalize both sides through realpath before computing the containment check.
+  // `git rev-parse --show-toplevel` returns a canonical (symlink-resolved) path
+  // — on macOS /private/var/... — while `runRoot` may carry the symlinked form
+  // the caller passed (/var/...). Left unnormalized, `relative()` reads a
+  // spurious "../.." escape and the run root is silently never gitignored.
+  const canonicalRunRoot = await canonicalize(runRoot);
+  const canonicalRepoRoot = await canonicalize(repoRoot);
+
+  const rel = relative(canonicalRepoRoot, canonicalRunRoot);
   if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return;
 
   const pattern = `${rel.split(sep).join("/")}/`;
@@ -220,6 +228,15 @@ async function readOptionalText(path: string): Promise<string> {
   } catch (err) {
     if ((err as { code?: unknown }).code === "ENOENT") return "";
     throw err;
+  }
+}
+
+/** realpath that degrades to the input path on error (missing path, EACCES). */
+async function canonicalize(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return path;
   }
 }
 

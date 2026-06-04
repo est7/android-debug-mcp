@@ -127,4 +127,21 @@ describe("createRunDir + runPath", () => {
     });
     expect(status).not.toContain(".android-debug-runs");
   });
+
+  it("wires .gitignore when the project path is a symlink (realpath mismatch)", async () => {
+    // macOS tmpdir() is /var/... → /private/var/...; using `scratch` un-realpath'd
+    // makes runRoot carry the symlink form while `git rev-parse --show-toplevel`
+    // returns the canonical /private/var/... form. Without realpath normalization
+    // `relative()` sees a spurious "../.." escape and skips wiring .gitignore.
+    // On a non-symlinked tmp (Linux), realpath === scratch and this is a no-op check.
+    execFileSync("git", ["-C", realpathSync(scratch), "init", "-q"]);
+    const runRoot = join(scratch, ".android-debug-runs"); // deliberately NOT realpath'd
+
+    const folder = await createRunDir(fixture({ runRoot, runRootSource: "explicit" }));
+    await folder.closeStreams();
+
+    const repoRoot = realpathSync(scratch);
+    const gitignore = readFileSync(join(repoRoot, ".gitignore"), "utf8");
+    expect(gitignore.match(/^\.android-debug-runs\/$/gm)).toHaveLength(1);
+  });
 });
