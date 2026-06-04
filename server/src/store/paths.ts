@@ -42,6 +42,13 @@ const cache = new Map<string, ResolvedRunRoot>();
  *      whether to append `runs/`)
  *   3. `git -C <cwd> rev-parse --show-toplevel` → `<top>/<REPO_LOCAL_DIRNAME>/`
  *   4. `~/.android-debug-mcp/runs/`
+ *
+ * Pure path resolution — it does NOT create `runRoot` on disk. Materialization
+ * is lazy: the first real run creates the tree via {@link createRunDir} (which
+ * `mkdir`s the full chain). Every read caller (orphan recovery, `list_runs`,
+ * `resolveRunDir`) tolerates a missing root through `safeReaddir`/ENOENT, so an
+ * idle server that is merely loaded never leaves an empty `.android-debug-runs/`
+ * behind.
  */
 export function resolveRunRoot(input: ResolveRunRootInput = {}): ResolvedRunRoot {
   const cwd = input.cwd ?? process.cwd();
@@ -74,7 +81,6 @@ export function resolveRunRoot(input: ResolveRunRootInput = {}): ResolvedRunRoot
       }
     }
   }
-  mkdirSync(resolved.runRoot, { recursive: true });
   cache.set(cacheKey, resolved);
   return resolved;
 }
