@@ -21,6 +21,7 @@ export const ANDROID_DEBUG_TOOL_NAMES = [
   "android_debug_send_key",
   "android_debug_swipe",
   "android_debug_capture",
+  "android_debug_screen_recording",
   "android_debug_search_logs",
   "android_debug_extract_crash_context",
   "android_debug_get_run_summary",

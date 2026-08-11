@@ -74,6 +74,8 @@ export const TOOL_ERROR_CODES = {
   // raw evidence past this boundary is exactly the security cliff Q6 prevents.
   // Branchable extras: {profileName: string | null, sourceId?: string}.
   evidence_redaction_unavailable: "evidence_redaction_unavailable",
+  screen_recording_active: "screen_recording_active",
+  screen_recording_not_active: "screen_recording_not_active",
 } as const;
 
 export type ToolErrorCode = (typeof TOOL_ERROR_CODES)[keyof typeof TOOL_ERROR_CODES];

@@ -16,7 +16,7 @@ import { resetPathsCache } from "../../src/store/paths.ts";
  *
  * Unlike the rest of `tests/`, this file talks to a REAL adb + a REAL connected
  * device. It is the executable form of `docs/test-plan.md`'s manual checklist:
- * it drives the full 23-tool inventory through one realistic session so the
+ * it drives the full 25-tool inventory through one realistic session so the
  * *sequence* + *real adb arg-building* + *real parsers* (`parseDevicesL`, UI
  * dump, logcat, screencap bytes) + *real run-folder writes / redaction* are
  * exercised together — the seam unit `vi.mock` tests cannot reach.
@@ -74,6 +74,7 @@ const ctx: {
   pids: number[];
   tap: { x: number; y: number };
   markerIso?: string;
+  recordingId?: string;
   anchorNode: NodeRef | null;
   foregroundActivity: string | null;
   ancestorChain: NodeRef[];
@@ -112,7 +113,7 @@ function runId(): string {
   return ctx.runId;
 }
 
-suite("real-device 23-tool sweep", () => {
+suite("real-device 25-tool sweep", () => {
   beforeAll(async () => {
     scratch = mkdtempSync(join(tmpdir(), "adm-e2e-"));
     process.env.ANDROID_DEBUG_MCP_RUN_ROOT = scratch;
@@ -218,6 +219,23 @@ suite("real-device 23-tool sweep", () => {
   );
 
   it(
+    "screen_recording start → explicit, bounded MP4 capture",
+    async () => {
+      const s = expectOk(
+        await call("android_debug_screen_recording", {
+          runId: runId(),
+          action: "start",
+          maxDurationSeconds: 30,
+        }),
+      );
+      expect(s.status).toBe("recording");
+      expect(typeof s.recordingId).toBe("string");
+      ctx.recordingId = s.recordingId as string;
+    },
+    STEP_TIMEOUT,
+  );
+
+  it(
     "list_elements → element tree (pick a tap target)",
     async () => {
       const s = expectOk(await call("android_debug_list_elements", { runId: runId() }));
@@ -303,6 +321,29 @@ suite("real-device 23-tool sweep", () => {
       );
       expect(typeof txt.ts).toBe("string");
       expect(typeof txt.redacted).toBe("boolean");
+    },
+    STEP_TIMEOUT,
+  );
+
+  it(
+    "screen_recording stop → finalized MP4 and sampled frames under run artifacts",
+    async () => {
+      if (ctx.recordingId === undefined) throw new Error("recordingId not set");
+      const s = expectOk(
+        await call("android_debug_screen_recording", {
+          runId: runId(),
+          action: "stop",
+          recordingId: ctx.recordingId,
+        }),
+      );
+      expect(s.status).toBe("saved");
+      expect(typeof s.videoPath).toBe("string");
+      expect(statSync(s.videoPath as string).size).toBeGreaterThan(0);
+      expect(Array.isArray(s.framePaths)).toBe(true);
+      expect((s.framePaths as string[]).length).toBeGreaterThan(0);
+      for (const framePath of s.framePaths as string[]) {
+        expect(statSync(framePath).size).toBeGreaterThan(0);
+      }
     },
     STEP_TIMEOUT,
   );
@@ -470,7 +511,7 @@ suite("real-device 23-tool sweep", () => {
     STEP_TIMEOUT,
   );
 
-  it("exercised the full 23-tool inventory", () => {
+  it("exercised the full 25-tool inventory", () => {
     // Guards against the inventory growing without this sweep noticing. The
     // set below is every tool the steps above call.
     const swept = new Set([
@@ -479,6 +520,7 @@ suite("real-device 23-tool sweep", () => {
       "android_debug_get_app_state",
       "android_debug_mark_event",
       "android_debug_capture",
+      "android_debug_screen_recording",
       "android_debug_list_elements",
       "android_debug_tap_node",
       "android_debug_map_ui_node_to_source",

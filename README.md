@@ -5,20 +5,23 @@
 A local **stdio MCP server** for **Android application-layer debug evidence
 collection**. It gives an MCP agent a session-scoped, audited way to drive a
 real device over `adb` — launch an app, reproduce a bug, interact with the
-screen, and collect logcat / crashes / screenshots into a self-contained run
-folder.
+screen, and collect logcat / crashes / screenshots / explicit MP4 screen
+recordings into a self-contained run folder.
 
 It is *evidence-first*: every tool call is recorded, every run is a folder on
 disk you can inspect, bundle, or hand to a teammate. It deliberately does **not**
 do element-based UI automation (no AccessibilityService, no view-tree tapping) —
 see [Coexisting with mobile-mcp](#coexisting-with-mobile-mcp).
 
-Status: **0.7.4** — 24 tools registered; v1 + v2 acceptance scenarios and on-device e2e pass.
+Status: **main** — 25 tools registered; v1 + v2 acceptance scenarios and on-device e2e pass.
 
 ## Prerequisites
 
 - **Bun ≥ 1.1** — the runtime (`engines.bun` in `package.json`).
 - **`adb`** on `PATH` (Android platform-tools), or `ADB_PATH` pointing at the binary.
+- **`ffmpeg`** on `PATH` to derive bounded sampled PNG frames from a saved MP4.
+  Recording still succeeds without it, with an explicit warning and an empty
+  `framePaths` result.
 - An Android device (or emulator) with **USB debugging** authorized: `adb devices`
   should list it in state `device`.
 - For `android_debug_input_text` only: the **ADBKeyBoard** helper APK installed
@@ -92,7 +95,7 @@ Set `ANDROID_DEBUG_MCP_INDEX_ROOT` only to move the index off `$HOME` — e.g.
 park it on a different volume, or isolate it per-workspace. Default
 (`~/.android-debug-mcp/run-index/`) is correct for almost all users.
 
-## The 24 tools
+## The 25 tools
 
 Every tool is named `android_debug_*`. On **success** it returns
 `structuredContent`. A recoverable **failure** instead returns
@@ -127,6 +130,7 @@ active run per app per device. Every interaction/evidence call carries the
 | Tool | What it does |
 |---|---|
 | `capture` | Screenshot and/or UI-hierarchy dump. `annotateElements:true` overlays numbered tap targets and returns the element map. |
+| `screen_recording` | Explicit start/stop MP4 recording for motion-dependent evidence, plus bounded ffmpeg-sampled PNG frames under the same run. It is never started automatically; use screenshots/UI dumps when static evidence is enough. |
 | `list_elements` | List on-screen interactive elements (resource-id / text / desc / bounds + a pre-computed tap center). Filter server-side: `resourceIdContains`, `clickableOnly`, `textContains`, `inViewport`, … |
 | `tap` · `long_press` · `swipe` | Coordinate gestures on the active session. |
 | `tap_node` | Tap a coordinate **and** resolve which node was hit + its nearest resource-id source anchor + ancestor chain — one call. |
@@ -191,6 +195,25 @@ android_debug_capture    { "runId": "<runId>", "kinds": ["screenshot", "ui_dump"
 
 `input_text` with `sensitive: true` records a length placeholder, never the
 text. It also auto-redacts text that looks like a credential.
+
+Record only when motion itself is evidence (transition timing, flicker,
+dropped frames, or an intermediate state), or when the user explicitly asks
+for video. Recording is not part of the default session path:
+
+```jsonc
+android_debug_screen_recording { "runId": "<runId>", "action": "start", "maxDurationSeconds": 4 }
+// ... drive the repro with tap / swipe / send_key / input_text ...
+android_debug_screen_recording { "runId": "<runId>", "action": "stop", "recordingId": "<recordingId>" }
+//   → { videoPath: "artifacts/screenrecord-<recordingId>.mp4",
+//       framePaths: ["artifacts/screenrecord-<recordingId>-frames/frame-001.png", ...] }
+```
+
+Only one recording may be active per run. `stop_session` attempts to stop and
+save an active recording if the caller omitted the explicit stop. Both the MP4
+and sampled frame directory are included by `collect_bundle`. Frame extraction
+is bounded to 72 PNGs across the configured duration. If ffmpeg is unavailable
+or fails, the MP4 remains valid evidence and the stop result reports an empty
+`framePaths` plus a warning.
 
 ### D — Disconnect: degraded session
 

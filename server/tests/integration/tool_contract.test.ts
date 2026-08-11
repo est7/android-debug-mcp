@@ -45,10 +45,10 @@ function errorOf(result: unknown): string {
 }
 
 describe("v1 tool inventory", () => {
-  it("registers exactly the 24 tools of ANDROID_DEBUG_TOOL_NAMES (v1 + v2-A + v2-F + v2-G + v2-J)", async () => {
+  it("registers exactly the 25 tools of ANDROID_DEBUG_TOOL_NAMES", async () => {
     const client = await harness();
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(24);
+    expect(tools).toHaveLength(25);
     expect(new Set(tools.map((t) => t.name))).toEqual(new Set(ANDROID_DEBUG_TOOL_NAMES));
   });
 
@@ -72,6 +72,7 @@ describe("v1 tool inventory", () => {
     const { tools } = await client.listTools();
     const evidenceTools = new Set([
       "android_debug_capture",
+      "android_debug_screen_recording",
       "android_debug_tap_node",
       "android_debug_list_elements",
       // v2-G Phase 3: lazy-pull writes files + events + commands even on
@@ -139,6 +140,7 @@ const ADB_TOUCHING_TOOLS = new Set([
   "android_debug_send_key",
   "android_debug_swipe",
   "android_debug_capture",
+  "android_debug_screen_recording",
   "android_debug_tap_node",
   "android_debug_list_elements",
   "android_debug_long_press",
@@ -163,6 +165,7 @@ const BAD_RUNID_CASES: Array<[string, Record<string, unknown>, string]> = [
   ["android_debug_send_key", { key: "BACK" }, "no_active_session"],
   ["android_debug_swipe", { x1: 1, y1: 1, x2: 2, y2: 2 }, "no_active_session"],
   ["android_debug_capture", { kinds: ["screenshot"] }, "no_active_session"],
+  ["android_debug_screen_recording", { action: "start" }, "no_active_session"],
   ["android_debug_perf_snapshot", {}, "no_active_session"],
   // v0.4.0 Block A: search_logs requires a narrowing filter; minimal `level`
   // gets past the filter gate so runId resolution can fire and emit run_missing.

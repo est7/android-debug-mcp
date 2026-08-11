@@ -1,4 +1,13 @@
+import {
+  type ActiveScreenRecording,
+  type ScreenRecordingStartInput,
+  type ScreenRecordingStopResult,
+  discardScreenRecording,
+  startScreenRecording,
+  stopScreenRecording,
+} from "../adb/screenrecord.ts";
 import { LogcatChannel } from "../logcat/channel.ts";
+import { ToolDomainError } from "../mcp/toolError.ts";
 import type { EvidenceContext, Profile } from "../profile/types.ts";
 import { redactValue } from "../redact/redact.ts";
 import type { LockHandle } from "../store/lock.ts";
@@ -76,6 +85,10 @@ export class Session {
    * {@link EvidenceContext.deviceTimezone}.
    */
   private deviceTimezone: string | null = null;
+  private screenRecording: {
+    readonly recordingId: string;
+    readonly startPromise: Promise<ActiveScreenRecording>;
+  } | null = null;
 
   constructor(init: SessionInit) {
     this.runId = init.runId;
@@ -173,6 +186,79 @@ export class Session {
     });
   }
 
+  async beginScreenRecording(input: ScreenRecordingStartInput): Promise<ActiveScreenRecording> {
+    if (this.screenRecording !== null) {
+      throw new ToolDomainError(
+        "screen_recording_active",
+        `Recording ${this.screenRecording.recordingId} is already active for session ${this.runId}.`,
+        { runId: this.runId, recordingId: this.screenRecording.recordingId },
+      );
+    }
+    const startPromise = Promise.resolve().then(() => startScreenRecording(input));
+    this.screenRecording = { recordingId: input.recordingId, startPromise };
+    try {
+      return await startPromise;
+    } catch (err) {
+      if (this.screenRecording?.recordingId === input.recordingId) this.screenRecording = null;
+      throw err;
+    }
+  }
+
+  async stopScreenRecording(
+    recordingId: string,
+  ): Promise<{ recording: ActiveScreenRecording; result: ScreenRecordingStopResult }> {
+    const pending = this.screenRecording;
+    if (pending === null || pending.recordingId !== recordingId) {
+      throw new ToolDomainError(
+        "screen_recording_not_active",
+        `Recording ${recordingId} is not active for session ${this.runId}.`,
+        {
+          runId: this.runId,
+          recordingId,
+          activeRecordingId: pending?.recordingId ?? null,
+        },
+      );
+    }
+    const recording = await pending.startPromise;
+    const result = await stopScreenRecording(recording);
+    if (this.screenRecording === pending) this.screenRecording = null;
+    return { recording, result };
+  }
+
+  private async finalizeScreenRecording(): Promise<void> {
+    const pending = this.screenRecording;
+    if (pending === null) return;
+    try {
+      const { recording, result } = await this.stopScreenRecording(pending.recordingId);
+      await this.appendCommand({
+        tool: "screen_recording",
+        action: "stop",
+        recordingId: recording.recordingId,
+        adb: `kill -2 ${recording.remotePid}; adb pull ${recording.remotePath} ${recording.artifactPath}`,
+        reason: "session_finalize",
+      });
+      await this.appendEvent({
+        type: "screen_recording_saved",
+        recordingId: recording.recordingId,
+        videoPath: recording.artifactPath,
+        byteSize: result.byteSize,
+        durationMs: result.durationMs,
+        forced: result.forced,
+        framePaths: result.framePaths,
+        reason: "session_finalize",
+      });
+    } catch (err) {
+      const recording = await pending.startPromise.catch(() => null);
+      if (recording !== null) await discardScreenRecording(recording).catch(() => undefined);
+      this.screenRecording = null;
+      await this.appendEvent({
+        type: "screen_recording_finalize_failed",
+        recordingId: pending.recordingId,
+        error: err instanceof Error ? err.message : String(err),
+      }).catch(() => undefined);
+    }
+  }
+
   healthSnapshot(): SessionHealthSnapshot {
     return buildHealthSnapshot({
       device: this.deviceConnectivity,
@@ -194,11 +280,13 @@ export class Session {
    * the lock. Errors are collected and the first is rethrown.
    *
    * Order is load-bearing:
-   *   1. logcat shutdown (§ D-M1) — the worker's last appends must land in
+   *   1. active screen recording finalization — writes its command/event and
+   *      MP4 artifact before the run streams close.
+   *   2. logcat shutdown (§ D-M1) — the worker's last appends must land in
    *      `logcat.jsonl` / `crash.jsonl` BEFORE step 3 closes those streams.
-   *   2. metadata write — folds in logcat shutdown stats (exit code, bytes).
-   *   3. close the run-folder jsonl streams.
-   *   4. release the global lock.
+   *   3. metadata write — folds in logcat shutdown stats (exit code, bytes).
+   *   4. close the run-folder jsonl streams.
+   *   5. release the global lock.
    */
   async finalize(endStatus: SessionEndStatus, now: Date = new Date()): Promise<void> {
     if (!this.isActive) return;
@@ -211,6 +299,7 @@ export class Session {
     this.timers.stop();
 
     const errors: unknown[] = [];
+    await this.finalizeScreenRecording();
     let logcatPatch: (current: Metadata) => Metadata = (c) => c;
     if (this.logcat !== null) {
       try {

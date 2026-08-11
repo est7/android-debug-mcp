@@ -4,18 +4,20 @@
 
 一个本地 **stdio MCP server**,用于 **Android 应用层调试取证**。它让 MCP agent
 以「会话隔离、全程留痕」的方式通过 `adb` 驱动真机——拉起 app、复现 bug、操作
-屏幕,并把 logcat / 崩溃 / 截图收进一个自洽的 run 目录。
+屏幕,并把 logcat / 崩溃 / 截图 / 显式 MP4 录屏收进一个自洽的 run 目录。
 
 它是 *证据优先* 的:每次工具调用都被记录,每个 run 都是磁盘上一个可检视、可打包、
 可转交同事的目录。它刻意 **不做** 基于元素的 UI 自动化(不碰 AccessibilityService、
 不按控件树点击)——见 [与 mobile-mcp 共存](#与-mobile-mcp-共存)。
 
-状态:**0.7.4** —— 24 个工具全部注册;v1 + v2 验收场景与真机 e2e 均通过。
+状态:**main** —— 25 个工具全部注册;v1 + v2 验收场景与真机 e2e 均通过。
 
 ## 前置要求
 
 - **Bun ≥ 1.1** —— 运行时(`package.json` 的 `engines.bun`)。
 - **`adb`** 在 `PATH` 上(Android platform-tools),或用 `ADB_PATH` 指向该二进制。
+- **`ffmpeg`** 在 `PATH` 上，用于从已保存的 MP4 生成有上限的采样 PNG 帧；缺失时
+  录屏仍成功，但会返回 warning 和空 `framePaths`。
 - 一台开了 **USB 调试** 并已授权的 Android 设备(或模拟器):`adb devices`
   应能看到它处于 `device` 状态。
 - 仅 `android_debug_input_text` 需要:设备上装好 **ADBKeyBoard** 辅助 APK——
@@ -72,7 +74,7 @@ claude mcp add android-debug -- npx -y github:est7/android-debug-mcp
 `metadata.json`、`events.jsonl`、`commands.jsonl`、`logcat.jsonl`、
 `logcat.raw.txt`、`crash.jsonl`、`summary.md`,以及一个 `artifacts/` 子目录。
 
-## 24 个工具
+## 25 个工具
 
 每个工具都叫 `android_debug_*`。工具 **成功** 时返回 `structuredContent`;
 **可恢复的失败** 则返回 `{ isError: true }`,把 JSON 形态的 `{error, message, …}`
@@ -105,6 +107,7 @@ claude mcp add android-debug -- npx -y github:est7/android-debug-mcp
 | 工具 | 作用 |
 |---|---|
 | `capture` | 截图和/或 UI 层级 dump。`annotateElements:true` 叠加带编号的可点目标并返回元素映射。 |
+| `screen_recording` | 为依赖动态过程的证据显式开始/停止 MP4 录屏，并在同一 run 下生成有上限的 ffmpeg 采样 PNG 帧。不会自动启动;静态证据足够时继续使用截图/UI dump。 |
 | `list_elements` | 列屏上可交互元素(resource-id / 文本 / desc / bounds + 预算好的点击中心)。server 端过滤:`resourceIdContains`、`clickableOnly`、`textContains`、`inViewport` 等。 |
 | `tap` · `long_press` · `swipe` | 活跃会话上的坐标手势。 |
 | `tap_node` | 点一个坐标 **并** 解析命中了哪个节点 + 最近的 resource-id 源锚点 + 祖先链——一次调用搞定。 |
@@ -168,6 +171,21 @@ android_debug_capture    { "runId": "<runId>", "kinds": ["screenshot", "ui_dump"
 
 `input_text` 带 `sensitive: true` 时只记一个长度占位符,绝不记原文。它还会自动
 脱敏看起来像凭据的文本。
+
+只有动态过程本身是证据(转场时序、闪烁、掉帧、中间帧),或用户明确要求视频时才录。
+录屏不在默认 session 路径中:
+
+```jsonc
+android_debug_screen_recording { "runId": "<runId>", "action": "start", "maxDurationSeconds": 4 }
+// ... 用 tap / swipe / send_key / input_text 驱动复现 ...
+android_debug_screen_recording { "runId": "<runId>", "action": "stop", "recordingId": "<recordingId>" }
+//   → { videoPath: "artifacts/screenrecord-<recordingId>.mp4",
+//       framePaths: ["artifacts/screenrecord-<recordingId>-frames/frame-001.png", ...] }
+```
+
+每个 run 同时最多一个录屏。调用方漏掉显式 stop 时,`stop_session` 会尝试停止并保存。
+MP4 和采样帧目录都会被 `collect_bundle` 收入 bundle；采样帧按配置时长均匀抽取，最多
+72 张。缺少 ffmpeg 或抽帧失败时不会丢掉已验证的 MP4，返回空 `framePaths` 和明确 warning。
 
 ### D —— 断连:会话降级
 
