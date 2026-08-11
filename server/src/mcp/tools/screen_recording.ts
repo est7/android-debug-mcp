@@ -37,7 +37,16 @@ const outputSchema = z
     durationMs: z.number().int().nonnegative().optional(),
     byteSize: z.number().int().nonnegative().optional(),
     forced: z.boolean().optional(),
-    framePaths: z.array(z.string()).optional(),
+    contactSheet: z
+      .object({
+        path: z.string(),
+        frameCount: z.number().int().positive(),
+        columns: z.number().int().positive(),
+        rows: z.number().int().positive(),
+        order: z.literal("left_to_right_top_to_bottom"),
+      })
+      .nullable()
+      .optional(),
     warnings: z.array(z.string()).optional(),
   })
   .strict();
@@ -47,7 +56,7 @@ const description = [
   "",
   "Use when: motion itself is evidence — transition timing, flicker, dropped frames, or an intermediate visual state — or the user explicitly asks for video. Do not record by default when a screenshot, UI dump, log, or structured evidence answers the question. Recording has privacy, storage, and device-performance cost. The recording is screen-only; protected/secure surfaces may be blank.",
   '`Args: `runId`; `action:"start"|"stop"`. Start accepts optional `maxDurationSeconds` (1-180, default 10) and `bitRate` (1,000,000-100,000,000, default 12,000,000), and rejects `recordingId`. Stop requires the exact `recordingId` returned by start and rejects start-only options. One recording may be active per run.',
-  'Returns: start → `{runId, recordingId, action:"start", status:"recording", startedAt, maxDurationSeconds, bitRate}`; stop → the same identity plus `{action:"stop", status:"saved", stoppedAt, videoPath, framePaths, durationMs, byteSize, forced, warnings?}`. The MP4 and bounded ffmpeg-sampled PNG frames are stored under the run\'s `artifacts/` directory and included by `collect_bundle`. If ffmpeg is unavailable or extraction fails, the MP4 remains saved and `framePaths` is empty with a warning. `stop_session` automatically attempts to stop and save an omitted active recording.',
+  'Returns: start → `{runId, recordingId, action:"start", status:"recording", startedAt, maxDurationSeconds, bitRate}`; stop → the same identity plus `{action:"stop", status:"saved", stoppedAt, videoPath, contactSheet, durationMs, byteSize, forced, warnings?}`. `contactSheet` is one chronological PNG with `{path, frameCount, columns, rows, order:"left_to_right_top_to_bottom"}` so an agent can inspect once and cite a cell by sequence index or row/column. The MP4 and contact sheet live under the run\'s `artifacts/` directory and are included by `collect_bundle`. If ffmpeg is unavailable or generation fails, the MP4 remains saved and `contactSheet` is null with a warning. `stop_session` automatically attempts to stop and save an omitted active recording.',
   "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `query_malformed` for action-specific argument misuse; `screen_recording_active` when start is called twice; `screen_recording_not_active` when stop has no matching active recording; `adb_not_found` when adb is missing; `adb_command_failed` when screenrecord, process stop, pull, or MP4 validation fails.",
 ].join("\n");
 
@@ -136,7 +145,7 @@ export function registerScreenRecording(server: McpServer, manager: SessionManag
         byteSize: result.byteSize,
         durationMs: result.durationMs,
         forced: result.forced,
-        framePaths: result.framePaths,
+        contactSheet: result.contactSheet,
         reason: "explicit_stop",
       });
       return ok({
@@ -152,7 +161,7 @@ export function registerScreenRecording(server: McpServer, manager: SessionManag
         durationMs: result.durationMs,
         byteSize: result.byteSize,
         forced: result.forced,
-        framePaths: [...result.framePaths],
+        contactSheet: result.contactSheet,
         ...(result.warnings.length > 0 ? { warnings: [...result.warnings] } : {}),
       });
     },

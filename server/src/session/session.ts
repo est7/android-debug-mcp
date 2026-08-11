@@ -244,7 +244,7 @@ export class Session {
         byteSize: result.byteSize,
         durationMs: result.durationMs,
         forced: result.forced,
-        framePaths: result.framePaths,
+        contactSheet: result.contactSheet,
         reason: "session_finalize",
       });
     } catch (err) {

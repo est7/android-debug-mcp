@@ -42,10 +42,9 @@ function makeRunDir(): string {
   );
   writeFileSync(join(runDir, "artifacts", `screenshot-${RUN_ID}.png`), "PNGDATA");
   writeFileSync(join(runDir, "artifacts", "screenrecord-abcdef123456.mp4"), "MP4DATA");
-  mkdirSync(join(runDir, "artifacts", "screenrecord-abcdef123456-frames"));
   writeFileSync(
-    join(runDir, "artifacts", "screenrecord-abcdef123456-frames", "frame-001.png"),
-    "FRAMEPNG",
+    join(runDir, "artifacts", "screenrecord-abcdef123456-contact-sheet.png"),
+    "CONTACTSHEETPNG",
   );
   return runDir;
 }
@@ -75,7 +74,7 @@ describe("createBundle logs policy (§ C-4)", () => {
     expect(entries.some((e) => e.endsWith("events.jsonl"))).toBe(true);
     expect(entries.some((e) => e.endsWith(".png"))).toBe(true);
     expect(entries.some((e) => e.endsWith(".mp4"))).toBe(true);
-    expect(entries.some((e) => e.endsWith("screenrecord-abcdef123456-frames/frame-001.png"))).toBe(
+    expect(entries.some((e) => e.endsWith("screenrecord-abcdef123456-contact-sheet.png"))).toBe(
       true,
     );
     expect(entries.some((e) => e.endsWith("logcat.jsonl"))).toBe(false);

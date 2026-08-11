@@ -1,5 +1,5 @@
 import { open, stat } from "node:fs/promises";
-import { extractVideoFrames } from "../media/video_frames.ts";
+import { type VideoContactSheet, buildVideoContactSheet } from "../media/video_contact_sheet.ts";
 import { runAdb } from "./adb.ts";
 import { AdbExecError } from "./errors.ts";
 
@@ -26,7 +26,7 @@ export interface ScreenRecordingStopResult {
   readonly durationMs: number;
   readonly byteSize: number;
   readonly forced: boolean;
-  readonly framePaths: readonly string[];
+  readonly contactSheet: VideoContactSheet | null;
   readonly warnings: readonly string[];
 }
 
@@ -117,9 +117,9 @@ export async function stopScreenRecording(
   }
 
   const stoppedAt = new Date().toISOString();
-  const frameResult = await extractVideoFrames({
+  const contactSheetResult = await buildVideoContactSheet({
     videoPath: recording.artifactPath,
-    framesDir: `${recording.artifactPath.slice(0, -".mp4".length)}-frames`,
+    contactSheetPath: `${recording.artifactPath.slice(0, -".mp4".length)}-contact-sheet.png`,
     maxDurationSeconds: recording.maxDurationSeconds,
   });
   return {
@@ -127,10 +127,10 @@ export async function stopScreenRecording(
     durationMs: Math.max(0, Date.parse(stoppedAt) - Date.parse(recording.startedAt)),
     byteSize,
     forced,
-    framePaths: frameResult.framePaths,
+    contactSheet: contactSheetResult.contactSheet,
     warnings: [
       ...(forced ? ["screenrecord required SIGKILL; MP4 finalization may be incomplete"] : []),
-      ...frameResult.warnings,
+      ...contactSheetResult.warnings,
     ],
   };
 }

@@ -16,8 +16,8 @@
 
 - **Bun ≥ 1.1** —— 运行时(`package.json` 的 `engines.bun`)。
 - **`adb`** 在 `PATH` 上(Android platform-tools),或用 `ADB_PATH` 指向该二进制。
-- **`ffmpeg`** 在 `PATH` 上，用于从已保存的 MP4 生成有上限的采样 PNG 帧；缺失时
-  录屏仍成功，但会返回 warning 和空 `framePaths`。
+- **`ffmpeg`** 在 `PATH` 上，用于从已保存的 MP4 生成一张按时序排列的 PNG 接触表；
+  缺失时录屏仍成功，但会返回 warning 和 `contactSheet: null`。
 - 一台开了 **USB 调试** 并已授权的 Android 设备(或模拟器):`adb devices`
   应能看到它处于 `device` 状态。
 - 仅 `android_debug_input_text` 需要:设备上装好 **ADBKeyBoard** 辅助 APK——
@@ -107,7 +107,7 @@ claude mcp add android-debug -- npx -y github:est7/android-debug-mcp
 | 工具 | 作用 |
 |---|---|
 | `capture` | 截图和/或 UI 层级 dump。`annotateElements:true` 叠加带编号的可点目标并返回元素映射。 |
-| `screen_recording` | 为依赖动态过程的证据显式开始/停止 MP4 录屏，并在同一 run 下生成有上限的 ffmpeg 采样 PNG 帧。不会自动启动;静态证据足够时继续使用截图/UI dump。 |
+| `screen_recording` | 为依赖动态过程的证据显式开始/停止 MP4 录屏，并在同一 run 下生成一张按时序排列的 ffmpeg 接触表。不会自动启动;静态证据足够时继续使用截图/UI dump。 |
 | `list_elements` | 列屏上可交互元素(resource-id / 文本 / desc / bounds + 预算好的点击中心)。server 端过滤:`resourceIdContains`、`clickableOnly`、`textContains`、`inViewport` 等。 |
 | `tap` · `long_press` · `swipe` | 活跃会话上的坐标手势。 |
 | `tap_node` | 点一个坐标 **并** 解析命中了哪个节点 + 最近的 resource-id 源锚点 + 祖先链——一次调用搞定。 |
@@ -180,12 +180,15 @@ android_debug_screen_recording { "runId": "<runId>", "action": "start", "maxDura
 // ... 用 tap / swipe / send_key / input_text 驱动复现 ...
 android_debug_screen_recording { "runId": "<runId>", "action": "stop", "recordingId": "<recordingId>" }
 //   → { videoPath: "artifacts/screenrecord-<recordingId>.mp4",
-//       framePaths: ["artifacts/screenrecord-<recordingId>-frames/frame-001.png", ...] }
+//       contactSheet: { path: "artifacts/screenrecord-<recordingId>-contact-sheet.png",
+//         frameCount: 15, columns: 6, rows: 3,
+//         order: "left_to_right_top_to_bottom" } }
 ```
 
 每个 run 同时最多一个录屏。调用方漏掉显式 stop 时,`stop_session` 会尝试停止并保存。
-MP4 和采样帧目录都会被 `collect_bundle` 收入 bundle；采样帧按配置时长均匀抽取，最多
-72 张。缺少 ffmpeg 或抽帧失败时不会丢掉已验证的 MP4，返回空 `framePaths` 和明确 warning。
+MP4 和接触表都会被 `collect_bundle` 收入 bundle。接触表最多 36 格，按从左到右、
+从上到下的时间顺序排列，agent 只读一张图即可按序号或行列引用。缺少 ffmpeg 或生成
+失败时不会丢掉已验证的 MP4，返回 `contactSheet: null` 和明确 warning。
 
 ### D —— 断连:会话降级
 

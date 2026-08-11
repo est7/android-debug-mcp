@@ -27,13 +27,19 @@ vi.mock("../../src/adb/screenrecord.ts", () => ({
     writeFileSync(artifactPath, Buffer.concat([Buffer.alloc(4), Buffer.from("ftypisom")]), {
       flag: "w",
     });
-    const framePath = artifactPath.replace(/\.mp4$/, "-frames/frame-001.png");
+    const contactSheetPath = artifactPath.replace(/\.mp4$/, "-contact-sheet.png");
     return {
       stoppedAt: "2026-08-11T10:00:04.000Z",
       durationMs: 4_000,
       byteSize: 12,
       forced: false,
-      framePaths: [framePath],
+      contactSheet: {
+        path: contactSheetPath,
+        frameCount: 15,
+        columns: 6,
+        rows: 3,
+        order: "left_to_right_top_to_bottom",
+      },
       warnings: [],
     };
   },
@@ -181,14 +187,18 @@ describe("android_debug_screen_recording", () => {
     expect(structured(stop).videoPath).toBe(
       join(runDir, "artifacts", `screenrecord-${recordingId}.mp4`),
     );
-    expect(structured(stop).framePaths).toEqual([
-      join(runDir, "artifacts", `screenrecord-${recordingId}-frames`, "frame-001.png"),
-    ]);
+    expect(structured(stop).contactSheet).toEqual({
+      path: join(runDir, "artifacts", `screenrecord-${recordingId}-contact-sheet.png`),
+      frameCount: 15,
+      columns: 6,
+      rows: 3,
+      order: "left_to_right_top_to_bottom",
+    });
 
     const events = readFileSync(join(runDir, "events.jsonl"), "utf8");
     expect(events).toContain('"type":"screen_recording_started"');
     expect(events).toContain('"type":"screen_recording_saved"');
-    expect(events).toContain(`screenrecord-${recordingId}-frames/frame-001.png`);
+    expect(events).toContain(`screenrecord-${recordingId}-contact-sheet.png`);
     const commands = readFileSync(join(runDir, "commands.jsonl"), "utf8");
     expect(commands).toContain('"tool":"screen_recording"');
     expect(commands).toContain("screenrecord --bit-rate 12000000 --time-limit 4");

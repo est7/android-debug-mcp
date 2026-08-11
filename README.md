@@ -19,9 +19,9 @@ Status: **main** — 25 tools registered; v1 + v2 acceptance scenarios and on-de
 
 - **Bun ≥ 1.1** — the runtime (`engines.bun` in `package.json`).
 - **`adb`** on `PATH` (Android platform-tools), or `ADB_PATH` pointing at the binary.
-- **`ffmpeg`** on `PATH` to derive bounded sampled PNG frames from a saved MP4.
+- **`ffmpeg`** on `PATH` to derive one ordered PNG contact sheet from a saved MP4.
   Recording still succeeds without it, with an explicit warning and an empty
-  `framePaths` result.
+  `contactSheet` result.
 - An Android device (or emulator) with **USB debugging** authorized: `adb devices`
   should list it in state `device`.
 - For `android_debug_input_text` only: the **ADBKeyBoard** helper APK installed
@@ -130,7 +130,7 @@ active run per app per device. Every interaction/evidence call carries the
 | Tool | What it does |
 |---|---|
 | `capture` | Screenshot and/or UI-hierarchy dump. `annotateElements:true` overlays numbered tap targets and returns the element map. |
-| `screen_recording` | Explicit start/stop MP4 recording for motion-dependent evidence, plus bounded ffmpeg-sampled PNG frames under the same run. It is never started automatically; use screenshots/UI dumps when static evidence is enough. |
+| `screen_recording` | Explicit start/stop MP4 recording for motion-dependent evidence, plus one ordered ffmpeg contact sheet under the same run. It is never started automatically; use screenshots/UI dumps when static evidence is enough. |
 | `list_elements` | List on-screen interactive elements (resource-id / text / desc / bounds + a pre-computed tap center). Filter server-side: `resourceIdContains`, `clickableOnly`, `textContains`, `inViewport`, … |
 | `tap` · `long_press` · `swipe` | Coordinate gestures on the active session. |
 | `tap_node` | Tap a coordinate **and** resolve which node was hit + its nearest resource-id source anchor + ancestor chain — one call. |
@@ -205,15 +205,18 @@ android_debug_screen_recording { "runId": "<runId>", "action": "start", "maxDura
 // ... drive the repro with tap / swipe / send_key / input_text ...
 android_debug_screen_recording { "runId": "<runId>", "action": "stop", "recordingId": "<recordingId>" }
 //   → { videoPath: "artifacts/screenrecord-<recordingId>.mp4",
-//       framePaths: ["artifacts/screenrecord-<recordingId>-frames/frame-001.png", ...] }
+//       contactSheet: { path: "artifacts/screenrecord-<recordingId>-contact-sheet.png",
+//         frameCount: 15, columns: 6, rows: 3,
+//         order: "left_to_right_top_to_bottom" } }
 ```
 
 Only one recording may be active per run. `stop_session` attempts to stop and
 save an active recording if the caller omitted the explicit stop. Both the MP4
-and sampled frame directory are included by `collect_bundle`. Frame extraction
-is bounded to 72 PNGs across the configured duration. If ffmpeg is unavailable
-or fails, the MP4 remains valid evidence and the stop result reports an empty
-`framePaths` plus a warning.
+and contact sheet are included by `collect_bundle`. The sheet contains up to 36
+chronological cells, ordered left-to-right then top-to-bottom, so an agent can
+inspect it once and cite a sequence index or row/column. If ffmpeg is unavailable
+or fails, the MP4 remains valid evidence and the stop result reports
+`contactSheet: null` plus a warning.
 
 ### D — Disconnect: degraded session
 
