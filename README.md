@@ -19,7 +19,7 @@ Status: **main** — 25 tools registered; v1 + v2 acceptance scenarios and on-de
 
 - **Bun ≥ 1.1** — the runtime (`engines.bun` in `package.json`).
 - **`adb`** on `PATH` (Android platform-tools), or `ADB_PATH` pointing at the binary.
-- **`ffmpeg`** on `PATH` to derive one ordered PNG contact sheet from a saved MP4.
+- **`ffmpeg`** on `PATH` to derive one visual-change key-frame contact sheet from a saved MP4.
   Recording still succeeds without it, with an explicit warning and an empty
   `contactSheet` result.
 - An Android device (or emulator) with **USB debugging** authorized: `adb devices`
@@ -130,7 +130,7 @@ active run per app per device. Every interaction/evidence call carries the
 | Tool | What it does |
 |---|---|
 | `capture` | Screenshot and/or UI-hierarchy dump. `annotateElements:true` overlays numbered tap targets and returns the element map. |
-| `screen_recording` | Explicit start/stop MP4 recording for motion-dependent evidence, plus one ordered ffmpeg contact sheet under the same run. It is never started automatically; use screenshots/UI dumps when static evidence is enough. |
+| `screen_recording` | Explicit start/stop MP4 recording for motion-dependent evidence, plus one visual-change key-frame contact sheet under the same run. It is never started automatically; use screenshots/UI dumps when static evidence is enough. |
 | `list_elements` | List on-screen interactive elements (resource-id / text / desc / bounds + a pre-computed tap center). Filter server-side: `resourceIdContains`, `clickableOnly`, `textContains`, `inViewport`, … |
 | `tap` · `long_press` · `swipe` | Coordinate gestures on the active session. |
 | `tap_node` | Tap a coordinate **and** resolve which node was hit + its nearest resource-id source anchor + ancestor chain — one call. |
@@ -207,15 +207,19 @@ android_debug_screen_recording { "runId": "<runId>", "action": "stop", "recordin
 //   → { videoPath: "artifacts/screenrecord-<recordingId>.mp4",
 //       contactSheet: { path: "artifacts/screenrecord-<recordingId>-contact-sheet.png",
 //         frameCount: 15, columns: 6, rows: 3,
-//         order: "left_to_right_top_to_bottom" } }
+//         order: "left_to_right_top_to_bottom", selection: "visual_change",
+//         timestampsMs: [0, 267, 533, "..."] } }
 ```
 
 Only one recording may be active per run. `stop_session` attempts to stop and
 save an active recording if the caller omitted the explicit stop. Both the MP4
-and contact sheet are included by `collect_bundle`. The sheet contains up to 36
-chronological cells, ordered left-to-right then top-to-bottom, so an agent can
-inspect it once and cite a sequence index or row/column. If ffmpeg is unavailable
-or fails, the MP4 remains valid evidence and the stop result reports
+and contact sheet are included by `collect_bundle`. ffmpeg compares every decoded
+frame with its predecessor instead of sampling fixed time intervals, retains the
+first and last state, and selects up to 36 visually distinct changes. This keeps
+single-frame flicker eligible while limiting redundant frames. Cells remain ordered
+left-to-right then top-to-bottom; `timestampsMs[i]` identifies cell `i + 1`, so an
+agent can inspect once and cite a cell or timestamp. If ffmpeg is unavailable or
+fails, the MP4 remains valid evidence and the stop result reports
 `contactSheet: null` plus a warning.
 
 ### D — Disconnect: degraded session

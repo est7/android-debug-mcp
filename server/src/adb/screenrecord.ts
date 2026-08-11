@@ -120,7 +120,6 @@ export async function stopScreenRecording(
   const contactSheetResult = await buildVideoContactSheet({
     videoPath: recording.artifactPath,
     contactSheetPath: `${recording.artifactPath.slice(0, -".mp4".length)}-contact-sheet.png`,
-    maxDurationSeconds: recording.maxDurationSeconds,
   });
   return {
     stoppedAt,

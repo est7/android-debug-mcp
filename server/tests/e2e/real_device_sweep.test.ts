@@ -326,7 +326,7 @@ suite("real-device 25-tool sweep", () => {
   );
 
   it(
-    "screen_recording stop → finalized MP4 and ordered contact sheet under run artifacts",
+    "screen_recording stop → finalized MP4 and visual-change contact sheet under run artifacts",
     async () => {
       if (ctx.recordingId === undefined) throw new Error("recordingId not set");
       const s = expectOk(
@@ -345,6 +345,8 @@ suite("real-device 25-tool sweep", () => {
       expect(contactSheet.columns).toBeGreaterThan(0);
       expect(contactSheet.rows).toBeGreaterThan(0);
       expect(contactSheet.order).toBe("left_to_right_top_to_bottom");
+      expect(contactSheet.selection).toBe("visual_change");
+      expect(contactSheet.timestampsMs).toHaveLength(contactSheet.frameCount as number);
     },
     STEP_TIMEOUT,
   );

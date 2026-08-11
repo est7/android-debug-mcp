@@ -182,13 +182,16 @@ android_debug_screen_recording { "runId": "<runId>", "action": "stop", "recordin
 //   → { videoPath: "artifacts/screenrecord-<recordingId>.mp4",
 //       contactSheet: { path: "artifacts/screenrecord-<recordingId>-contact-sheet.png",
 //         frameCount: 15, columns: 6, rows: 3,
-//         order: "left_to_right_top_to_bottom" } }
+//         order: "left_to_right_top_to_bottom", selection: "visual_change",
+//         timestampsMs: [0, 267, 533, "..."] } }
 ```
 
 每个 run 同时最多一个录屏。调用方漏掉显式 stop 时,`stop_session` 会尝试停止并保存。
-MP4 和接触表都会被 `collect_bundle` 收入 bundle。接触表最多 36 格，按从左到右、
-从上到下的时间顺序排列，agent 只读一张图即可按序号或行列引用。缺少 ffmpeg 或生成
-失败时不会丢掉已验证的 MP4，返回 `contactSheet: null` 和明确 warning。
+MP4 和接触表都会被 `collect_bundle` 收入 bundle。ffmpeg 会比较每一个解码帧与前一帧
+的视觉差异，而不是按固定时间间隔抽样；首尾状态固定保留，再选择最多 36 个视觉变化，
+因此单帧闪烁仍有机会进入证据，同时限制重复画面。各格仍按从左到右、从上到下的时间
+顺序排列，`timestampsMs[i]` 对应第 `i + 1` 格，agent 只读一张图即可按格或时间戳引用。
+缺少 ffmpeg 或生成失败时不会丢掉已验证的 MP4，返回 `contactSheet: null` 和明确 warning。
 
 ### D —— 断连:会话降级
 

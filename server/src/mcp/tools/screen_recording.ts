@@ -44,6 +44,8 @@ const outputSchema = z
         columns: z.number().int().positive(),
         rows: z.number().int().positive(),
         order: z.literal("left_to_right_top_to_bottom"),
+        selection: z.literal("visual_change"),
+        timestampsMs: z.array(z.number().int().nonnegative()),
       })
       .nullable()
       .optional(),
@@ -56,7 +58,7 @@ const description = [
   "",
   "Use when: motion itself is evidence — transition timing, flicker, dropped frames, or an intermediate visual state — or the user explicitly asks for video. Do not record by default when a screenshot, UI dump, log, or structured evidence answers the question. Recording has privacy, storage, and device-performance cost. The recording is screen-only; protected/secure surfaces may be blank.",
   '`Args: `runId`; `action:"start"|"stop"`. Start accepts optional `maxDurationSeconds` (1-180, default 10) and `bitRate` (1,000,000-100,000,000, default 12,000,000), and rejects `recordingId`. Stop requires the exact `recordingId` returned by start and rejects start-only options. One recording may be active per run.',
-  'Returns: start → `{runId, recordingId, action:"start", status:"recording", startedAt, maxDurationSeconds, bitRate}`; stop → the same identity plus `{action:"stop", status:"saved", stoppedAt, videoPath, contactSheet, durationMs, byteSize, forced, warnings?}`. `contactSheet` is one chronological PNG with `{path, frameCount, columns, rows, order:"left_to_right_top_to_bottom"}` so an agent can inspect once and cite a cell by sequence index or row/column. The MP4 and contact sheet live under the run\'s `artifacts/` directory and are included by `collect_bundle`. If ffmpeg is unavailable or generation fails, the MP4 remains saved and `contactSheet` is null with a warning. `stop_session` automatically attempts to stop and save an omitted active recording.',
+  'Returns: start → `{runId, recordingId, action:"start", status:"recording", startedAt, maxDurationSeconds, bitRate}`; stop → the same identity plus `{action:"stop", status:"saved", stoppedAt, videoPath, contactSheet, durationMs, byteSize, forced, warnings?}`. `contactSheet` is one chronological PNG with `{path, frameCount, columns, rows, order:"left_to_right_top_to_bottom", selection:"visual_change", timestampsMs}`. ffmpeg compares every decoded frame with its predecessor, retains first/last state, selects visually distinct changes (including a one-frame flicker), and orders the selected cells chronologically; it does not sample at fixed time intervals. `timestampsMs[i]` identifies cell `i + 1`, so an agent can inspect once and cite a cell or timestamp. The MP4 and contact sheet live under the run\'s `artifacts/` directory and are included by `collect_bundle`. If ffmpeg is unavailable or generation fails, the MP4 remains saved and `contactSheet` is null with a warning. `stop_session` automatically attempts to stop and save an omitted active recording.',
   "Errors: `no_active_session` for an unknown runId; `device_disconnected` when the device has dropped; `query_malformed` for action-specific argument misuse; `screen_recording_active` when start is called twice; `screen_recording_not_active` when stop has no matching active recording; `adb_not_found` when adb is missing; `adb_command_failed` when screenrecord, process stop, pull, or MP4 validation fails.",
 ].join("\n");
 

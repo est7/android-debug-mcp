@@ -39,6 +39,10 @@ vi.mock("../../src/adb/screenrecord.ts", () => ({
         columns: 6,
         rows: 3,
         order: "left_to_right_top_to_bottom",
+        selection: "visual_change",
+        timestampsMs: [
+          0, 260, 520, 780, 1040, 1300, 1560, 1820, 2080, 2340, 2600, 2860, 3120, 3380, 4000,
+        ],
       },
       warnings: [],
     };
@@ -193,6 +197,10 @@ describe("android_debug_screen_recording", () => {
       columns: 6,
       rows: 3,
       order: "left_to_right_top_to_bottom",
+      selection: "visual_change",
+      timestampsMs: [
+        0, 260, 520, 780, 1040, 1300, 1560, 1820, 2080, 2340, 2600, 2860, 3120, 3380, 4000,
+      ],
     });
 
     const events = readFileSync(join(runDir, "events.jsonl"), "utf8");
