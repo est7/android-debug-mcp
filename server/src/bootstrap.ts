@@ -26,6 +26,8 @@ import { registerStopSession } from "./mcp/tools/stop_session.ts";
 import { registerSwipe } from "./mcp/tools/swipe.ts";
 import { registerTap } from "./mcp/tools/tap.ts";
 import { registerTapNode } from "./mcp/tools/tap_node.ts";
+import { registerWireDiff } from "./mcp/tools/wire_diff.ts";
+import { registerWireSnapshot } from "./mcp/tools/wire_snapshot.ts";
 import { recoverOrphans } from "./recovery/scan.ts";
 import { HealthMonitor } from "./session/health.ts";
 import { SessionManager } from "./session/manager.ts";
@@ -100,4 +102,6 @@ export function registerAllTools(server: McpServer, manager: SessionManager): vo
   registerSearchEvidence(server, manager);
   registerExtractEvidenceContext(server, manager);
   registerPerfSnapshot(server, manager);
+  registerWireSnapshot(server, manager);
+  registerWireDiff(server, manager);
 }

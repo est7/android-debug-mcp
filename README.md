@@ -13,7 +13,7 @@ disk you can inspect, bundle, or hand to a teammate. It deliberately does **not*
 do element-based UI automation (no AccessibilityService, no view-tree tapping) —
 see [Coexisting with mobile-mcp](#coexisting-with-mobile-mcp).
 
-Status: **main** — 25 tools registered; v1 + v2 acceptance scenarios and on-device e2e pass.
+Status: **main** — 27 tools registered; v1 + v2 acceptance scenarios and on-device e2e pass.
 
 ## Prerequisites
 
@@ -95,7 +95,7 @@ Set `ANDROID_DEBUG_MCP_INDEX_ROOT` only to move the index off `$HOME` — e.g.
 park it on a different volume, or isolate it per-workspace. Default
 (`~/.android-debug-mcp/run-index/`) is correct for almost all users.
 
-## The 25 tools
+## The 27 tools
 
 Every tool is named `android_debug_*`. On **success** it returns
 `structuredContent`. A recoverable **failure** instead returns
@@ -148,6 +148,8 @@ active run per app per device. Every interaction/evidence call carries the
 | `extract_evidence_context` | Records around a marker: single-source paginated, **or** a multi-source causal timeline merging logcat + events + profile sources by `tsMs` (logcat defaults to the app's pids, noisy tags dropped). |
 | `extract_crash_context` | Raw-log context around a crash recorded in the run. |
 | `perf_snapshot` | Live performance snapshot (cpu / mem / gfx) for the active session. |
+| `wire_snapshot` | Project a run's `http_*.jsonl` into a redacted request-parameter snapshot (decoded `_random`/`_sign` + form fields, role, stable `<uid:n>`/`<phone:n>`/`<email:n>` aliases) written to `<runDir>/wire/`. Filter by `only` paths and a time / mark window. |
+| `wire_diff` | Compare two snapshots (or a legacy recording) by endpoint: `MATCH` / `CHANGED` / `MISSING` / `EXTRA` / `DUPLICATE`, normalized projections only. A port of `baseline_diff.py`. |
 | `collect_bundle` | Package a run folder into a portable bundle — hand to a teammate or attach to a ticket. |
 
 > Profile-scoped tools (`search_evidence`, the profile sources in
@@ -356,6 +358,34 @@ android_debug_get_run_summary  { "runId": "<baseline>" }
 Why this shape: snapshots + markers capture the moment; `list_runs` /
 `get_run_summary` turn "is this worse than last build?" into a side-by-side on
 two folders that each pin their own git/app provenance.
+
+### W6 — "Does the new build send the same account requests as the reference build?"
+
+No app-side recorder: both debug builds already write `http_*.jsonl`. Drive the
+same flow on each build (one run per build), then snapshot and diff.
+
+```jsonc
+android_debug_mark_event        { "runId": "<ref>",  "name": "signin_start" }
+//   ... sign in on the reference build ...
+android_debug_wire_snapshot     { "runId": "<ref>",  "label": "ref",  "fromMark": "signin_start",
+                                  "only": ["/user/login", "/user/check-phone", "/public/phone-code"] }
+//   → <refRunDir>/wire/ref.jsonl   (credentials <redacted>, uid/phone/email aliased)
+android_debug_wire_snapshot     { "runId": "<cand>", "label": "cand", "fromMark": "signin_start",
+                                  "only": ["/user/login", "/user/check-phone", "/public/phone-code"] }
+android_debug_wire_diff         { "baseline": "<refRunDir>/wire/ref.jsonl",
+                                  "capture":  "<candRunDir>/wire/cand.jsonl" }
+//   → { counts: { MATCH: 2, CHANGED: 1, MISSING: 0, EXTRA: 0, DUPLICATE: 0 },
+//       groups: [ { group: "POST /user/login [login_type=phone]", status: "CHANGED",
+//                   onlyBaseline: [ { fields: [["password","<r>"], ...] } ],
+//                   onlyCapture:  [ { fields: [["password",""], ...] } ] } ] }
+```
+
+Notes: values are compared by kind — build / locale / device / sign / time by
+presence, credentials by empty-versus-present, and a POST's query order is
+ignored. `role` comes from an optional `request.owner.role` the app may write
+(schema rev5); without it role is `null` and is left out of the comparison
+(`roleCompared:false`). A legacy recording (`projection.wire`) is accepted as
+`baseline`. Offline use: `files` + `outDir` instead of `runId`.
 
 ## Typing text (ADBKeyBoard)
 

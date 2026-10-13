@@ -10,7 +10,7 @@
 可转交同事的目录。它刻意 **不做** 基于元素的 UI 自动化(不碰 AccessibilityService、
 不按控件树点击)——见 [与 mobile-mcp 共存](#与-mobile-mcp-共存)。
 
-状态:**main** —— 25 个工具全部注册;v1 + v2 验收场景与真机 e2e 均通过。
+状态:**main** —— 27 个工具全部注册;v1 + v2 验收场景与真机 e2e 均通过。
 
 ## 前置要求
 
@@ -74,7 +74,7 @@ claude mcp add android-debug -- npx -y github:est7/android-debug-mcp
 `metadata.json`、`events.jsonl`、`commands.jsonl`、`logcat.jsonl`、
 `logcat.raw.txt`、`crash.jsonl`、`summary.md`,以及一个 `artifacts/` 子目录。
 
-## 25 个工具
+## 27 个工具
 
 每个工具都叫 `android_debug_*`。工具 **成功** 时返回 `structuredContent`;
 **可恢复的失败** 则返回 `{ isError: true }`,把 JSON 形态的 `{error, message, …}`
@@ -125,6 +125,8 @@ claude mcp add android-debug -- npx -y github:est7/android-debug-mcp
 | `extract_evidence_context` | marker 周围的记录:单源分页,**或** 多源因果时间线,把 logcat + events + profile 源按 `tsMs` 归并(logcat 默认收敛到 app 的 pids、丢掉噪声 tag)。 |
 | `extract_crash_context` | run 里某次崩溃周围的原始日志上下文。 |
 | `perf_snapshot` | 活跃会话的实时性能快照(cpu / mem / gfx)。 |
+| `wire_snapshot` | 把一次运行的 `http_*.jsonl` 投影成脱敏的请求参数快照(解密后的 `_random`/`_sign` + 表单字段、role、稳定的 `<uid:n>`/`<phone:n>`/`<email:n>` 别名),写入 `<runDir>/wire/`。可按 `only` 路径与时间 / mark 窗口过滤。 |
+| `wire_diff` | 按接口对比两份快照(或旧版录制):`MATCH` / `CHANGED` / `MISSING` / `EXTRA` / `DUPLICATE`,只输出归一化后的投影。移植自 `baseline_diff.py`。 |
 | `collect_bundle` | 把 run 目录打成可携带的 bundle——转交同事或附进工单。 |
 
 > profile 相关的工具(`search_evidence`、`extract_evidence_context` 里的 profile
@@ -321,6 +323,21 @@ android_debug_get_run_summary  { "runId": "<baseline>" }
 
 为什么这么串:快照 + marker 抓住当下;`list_runs` / `get_run_summary` 把"这次比
 上个构建差吗"变成两个各自钉死 git/app 溯源的目录之间的并排对比。
+
+### W6 —— "新版本发出的账号请求和参考版本一致吗?"
+
+不需要 app 侧录制器:两个 debug 构建本来就写 `http_*.jsonl`。两个版本各跑一遍同一流程(一版一个 run),然后做快照再对比。
+
+```jsonc
+android_debug_wire_snapshot { "runId": "<ref>",  "label": "ref",  "fromMark": "signin_start", "only": ["/user/login", "/user/check-phone"] }
+android_debug_wire_snapshot { "runId": "<cand>", "label": "cand", "fromMark": "signin_start", "only": ["/user/login", "/user/check-phone"] }
+android_debug_wire_diff     { "baseline": "<refRunDir>/wire/ref.jsonl", "capture": "<candRunDir>/wire/cand.jsonl" }
+//   → { counts: { MATCH, CHANGED, MISSING, EXTRA, DUPLICATE }, groups: [ 仅非 MATCH,归一化投影,无原始值 ] }
+```
+
+比较规则:build / 语言 / 设备 / 签名 / 时间字段只比"有无",凭证只比"空与非空",POST 的 query 顺序忽略;
+`role` 来自 app 可选写入的 `request.owner.role`(schema rev5),缺失时为 `null` 并从比较中去掉(`roleCompared:false`)。
+旧版录制(`projection.wire`)可直接作 `baseline`。离线用法:用 `files` + `outDir` 代替 `runId`。
 
 ## 文本输入(ADBKeyBoard)
 

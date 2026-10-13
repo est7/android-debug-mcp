@@ -34,6 +34,8 @@ export const ANDROID_DEBUG_TOOL_NAMES = [
   "android_debug_search_evidence",
   "android_debug_extract_evidence_context",
   "android_debug_perf_snapshot",
+  "android_debug_wire_snapshot",
+  "android_debug_wire_diff",
 ] as const;
 
 export type AndroidDebugToolName = (typeof ANDROID_DEBUG_TOOL_NAMES)[number];

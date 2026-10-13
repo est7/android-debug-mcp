@@ -123,7 +123,7 @@ describe("registerDebugTool", () => {
       expect(name.startsWith("android_debug_")).toBe(true);
     }
     // 25 tools — v1's 17 (§ G-Final), v2-A/F/G/J, plus explicit screen recording.
-    expect(ANDROID_DEBUG_TOOL_NAMES).toHaveLength(25);
+    expect(ANDROID_DEBUG_TOOL_NAMES).toHaveLength(27);
     expect(new Set(ANDROID_DEBUG_TOOL_NAMES).size).toBe(ANDROID_DEBUG_TOOL_NAMES.length);
   });
 });
