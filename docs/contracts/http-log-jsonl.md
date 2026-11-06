@@ -218,7 +218,7 @@
 | `request.encrypted` | Step 3 起写出：请求带着签名载荷(`_random` 和 `_sign` 都非空)时为 `true`。GET 的载荷在 URL query;已登录的表单 POST 只在 `FormBody` 里(`ParamInjectHelper` 不拼进 URL),两处都认，`decoded` 按同一处解密 |
 | `request.route` | 不写 |
 | `request.attempt` | 不写(缺省为 1) |
-| `request.owner.role` | Step 3 起写出：取自请求的 owner tag(`RequestOwner`,`common/session/.../SessionTypes.kt:61`)的子类名，没有 tag 为 `Untagged`。`rtcrequestlibrary` 在 `common` 之下，按类名 `com.androidtool.common.session.RequestOwner` 反射取 tag 类型(Poppo / Vone 同名同包);宿主里没有这个类时不写 |
+| `request.owner.role` | Step 3 起写出：请求的 owner tag(`RequestOwner`,`common/session/.../SessionTypes.kt:61`)的角色，没有 tag 为 `Untagged`。`rtcrequestlibrary` 在 `common` 之下，认不得这个类型，经 `IRTCRequestBridge.ownerRoleOf(request)` 由宿主给出:`common` 的 `RTCRequestBridge` 用 `common/network` 的 `ownerLogRole()` 按编译期类型穷举映射(`rtc:request` 1.0.7.1106.2 起;此前按类名反射)。宿主没实现(默认 null)时不写 |
 | `response.app` | 信封键 `status` / `code` / `err_code` / `err_msg` / `message`;`ok = !ServiceErrorController.isBizException(code ?: httpStatus, status ?: "")` |
 | `outcome` | Step 3 起写出,只用 `transport_error` / `http_error` / `app_error` / `ok`,**不写 `malformed`**(资源和 H5 的非信封响应是正常的) |
 | 脱敏 | Step 3 起在 producer 侧落实 §5(此前只有 consumer 在 bundle 出口脱敏);名单至少加上 `_token` |
