@@ -8,14 +8,14 @@ import {
   type GroupReport,
   MalformedWireInputError,
   compareProjections,
-  fromBaseline,
-  fromCapture,
   parseProjections,
+  readersFor,
 } from "../../wire/compare.ts";
 import { WIRE_SUBDIR, assertLabel } from "../../wire/snapshot.ts";
 import { registerDebugTool } from "../register.ts";
 import { ToolDomainError } from "../toolError.ts";
 import { ok, runIdInput } from "./_shared.ts";
+import { profileInput, resolveWire } from "./_wire.ts";
 
 const pathList = z.union([
   z.string().min(1).max(1024),
@@ -41,6 +41,7 @@ const inputSchema = z
     groupBy: z.array(z.string().min(1).max(64)).max(8).optional(),
     maxGroups: z.number().int().min(1).max(200).default(40),
     reportLabel: z.string().min(1).max(64).optional(),
+    profile: profileInput.optional(),
   })
   .strict();
 
@@ -59,6 +60,7 @@ const outputSchema = z
     counts: statusCounts,
     groupsTotal: z.number().int(),
     roleCompared: z.boolean(),
+    profile: z.string().nullable(),
     baselineRecords: z.number().int(),
     captureRecords: z.number().int(),
     groups: z.array(z.record(z.string(), z.unknown())),
@@ -72,8 +74,8 @@ const description = [
   "Compare a candidate build's request parameters with a reference build's, grouped by endpoint, and report what changed. A port of the account wire comparator (`baseline_diff.py`): same normalization, grouping and statuses.",
   "",
   "Use when: two `android_debug_wire_snapshot` outputs (or a legacy recording and a snapshot) must be checked for parity: did the new build send the same requests with the same parameters as the old one?",
-  "Args: `baseline` and `capture` (a JSONL path or a list of them; relative paths resolve inside `<runDir>/wire/` when `runId` is given; the baseline may also be a legacy recording with `projection.wire`); `only` (exact request paths to compare); `groupBy` (fields that split one path into groups; default `type`, `login_type`, `use`); `maxGroups` (non-MATCH groups returned, default 40); `runId` + `reportLabel` (write the full report to `<runDir>/wire/<reportLabel>.diff.json`).",
-  "Returns: `{counts:{MATCH,CHANGED,MISSING,EXTRA,DUPLICATE}, groupsTotal, roleCompared, baselineRecords, captureRecords, groups[], truncated, reportPath?, warnings?}`. `groups` holds only non-MATCH groups with normalized projections (credentials `<r>`, build / locale / device / sign / time values `*`, no raw values): `CHANGED` has `onlyBaseline`/`onlyCapture`, `DUPLICATE` has `repeated[{times,baselineTimes,projection}]`, `MISSING`/`EXTRA` have `projections`. Statuses: MATCH same projections; CHANGED different ones; MISSING only in the baseline; EXTRA only in the capture; DUPLICATE the capture sent a projection more often than the baseline (and more than once). Owner role is compared, a POST query's order is not, and when a record has no role the role is left out for both sides (`roleCompared:false`).",
+  "Args: `baseline` and `capture` (a JSONL path or a list of them; relative paths resolve inside `<runDir>/wire/` when `runId` is given; the baseline may also be a legacy recording with `projection.wire`); `only` (exact request paths to compare); `groupBy` (fields that split one path into groups; default `type`, `login_type`, `use`); `maxGroups` (non-MATCH groups returned, default 40); `runId` + `reportLabel` (write the full report to `<runDir>/wire/<reportLabel>.diff.json`); `profile` (a built-in profile whose wire to compare with, e.g. `dora`: its volatile parameters, device headers and default `groupBy`; default: the run's own profile, else Poppo's).",
+  "Returns: `{counts:{MATCH,CHANGED,MISSING,EXTRA,DUPLICATE}, groupsTotal, roleCompared, baselineRecords, captureRecords, groups[], truncated, reportPath?, warnings?}`. `groups` holds only non-MATCH groups with normalized projections (credentials `<r>`, build / locale / device / sign / time values `*`, no raw values): `CHANGED` has `onlyBaseline`/`onlyCapture`, `DUPLICATE` has `repeated[{times,baselineTimes,projection}]`, `MISSING`/`EXTRA` have `projections`. Statuses: MATCH same projections; CHANGED different ones; MISSING only in the baseline; EXTRA only in the capture; DUPLICATE the capture sent a projection more often than the baseline (and more than once). A record with a `route` (`request.route`) is grouped by it too, before any `groupBy` field. Owner role is compared, a POST query's order is not, and when a record has no role the role is left out for both sides (`roleCompared:false`).",
   "Errors: `invalid_argument` for malformed or unreadable input (a line that is not JSON, a recorder error, an unknown role, a missing file) or a relative path without `runId`; `run_missing` for an unknown runId.",
 ].join("\n");
 
@@ -114,6 +116,8 @@ export function registerWireDiff(server: McpServer, manager: SessionManager): vo
       };
       const asList = (v: string | string[]): string[] => (Array.isArray(v) ? v : [v]);
 
+      const wire = await resolveWire(input.profile, runDir);
+      const readers = readersFor(wire.policy);
       const only = input.only !== undefined ? new Set(input.only) : undefined;
       let comparison: ReturnType<typeof compareProjections>;
       let baselineRecords: number;
@@ -121,18 +125,19 @@ export function registerWireDiff(server: McpServer, manager: SessionManager): vo
       try {
         const baseline = parseProjections(
           await readAll(asList(input.baseline).map(resolve)),
-          fromBaseline,
+          readers.baseline,
           only,
         );
         const capture = parseProjections(
           await readAll(asList(input.capture).map(resolve)),
-          fromCapture,
+          readers.capture,
           only,
         );
         baselineRecords = baseline.length;
         captureRecords = capture.length;
         comparison = compareProjections(baseline, capture, {
           ...(input.groupBy !== undefined ? { discriminators: input.groupBy } : {}),
+          policy: wire.policy,
         });
       } catch (err) {
         if (err instanceof MalformedWireInputError) {
@@ -182,6 +187,7 @@ export function registerWireDiff(server: McpServer, manager: SessionManager): vo
         counts: comparison.counts,
         groupsTotal: comparison.groups.length,
         roleCompared: comparison.roleCompared,
+        profile: wire.profile,
         baselineRecords,
         captureRecords,
         groups: shown as unknown as Record<string, unknown>[],

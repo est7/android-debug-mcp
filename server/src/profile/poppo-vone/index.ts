@@ -1,3 +1,4 @@
+import { POPPO_WIRE } from "../../wire/policy.ts";
 import type { Profile } from "../types.ts";
 import { poppoHttpSource } from "./poppo_http/source.ts";
 import { poppoNavSource } from "./poppo_nav/source.ts";
@@ -6,9 +7,8 @@ import { poppoNavSource } from "./poppo_nav/source.ts";
  * `poppo-vone` profile —— v2-G's first reference profile.
  *
  * Phase 4 lands the `poppo_http` `EvidenceSource` that reads `http_*.jsonl`
- * from `/sdcard/Android/data/<ctx.packageName>/files/http-logs/` per
- * [`submodulepoppo/docs/projects/http-log-jsonl-schema.md`](../../../../../submodulepoppo/docs/projects/http-log-jsonl-schema.md)
- * rev4. The per-package path comes from `EvidenceContext.packageName`, so
+ * from `/sdcard/Android/data/<ctx.packageName>/files/http-logs/` per the
+ * contract `docs/contracts/http-log-jsonl.md` (v1 rev6; Poppo appendix §9.1). The per-package path comes from `EvidenceContext.packageName`, so
  * the single source impl serves both Poppo (`com.baitu.poppo`) and Vone
  * (`com.baitu.vone`) — they ship the same `CustomHttpLoggingInterceptor`.
  *
@@ -32,4 +32,5 @@ export const POPPO_VONE_PROFILE: Profile = {
     "StrictMode",
     "agora.io",
   ],
+  wire: POPPO_WIRE,
 };

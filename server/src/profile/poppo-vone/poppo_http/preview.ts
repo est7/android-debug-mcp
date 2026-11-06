@@ -89,6 +89,13 @@ function digestRecord(record: PoppoHttpRecord): ParsedRecord {
     status: record.response?.status ?? null,
     durationMs: record.durationMs,
     outcome: derivePoppoHttpOutcome(record),
+    // rev6: the gateway route that tells apart calls sharing one path (DoraLive's route endpoint).
+    ...(record.request.route !== undefined
+      ? { route: `${record.request.route.controller}/${record.request.route.method}` }
+      : {}),
+    ...(record.request.attempt !== undefined && record.request.attempt > 1
+      ? { attempt: record.request.attempt }
+      : {}),
     heartBeat: record.heartBeat,
     app:
       app === null || app === undefined

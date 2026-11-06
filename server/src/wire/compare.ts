@@ -17,6 +17,8 @@
  * by `tests/wire/crosscheck.test.ts`.
  */
 
+import { POPPO_WIRE, type WirePolicy } from "./policy.ts";
+
 export type Pair = readonly [string, string];
 
 /** A request reduced to what the comparison looks at. Values are already normalized (no raw values). */
@@ -28,6 +30,11 @@ export interface Projection {
   readonly deviceHeaders: boolean;
   readonly fields: readonly Pair[];
   readonly role: string | null;
+  /**
+   * The gateway route (`controller/method`) of a call that shares its path with others (DoraLive). Absent, not
+   * null, when there is none: a projection's identity is its JSON, which must not change for Poppo's records.
+   */
+  readonly route?: string;
 }
 
 export type GroupStatus = "MATCH" | "CHANGED" | "MISSING" | "EXTRA" | "DUPLICATE";
@@ -57,23 +64,8 @@ export class MalformedWireInputError extends Error {
 
 const ALIAS = /^<[a-z#:]+[0-9]*>$|^<redacted>$/;
 
-/** Values that depend on build, locale, clock or device; only key presence and position are compared. */
-export const VOLATILE: ReadonlySet<string> = new Set([
-  "_mtime",
-  "_random",
-  "_sign",
-  "_uid",
-  "v",
-  "vs",
-  "sl",
-  "l",
-  "mcc",
-  "smei_id",
-  "uuid",
-  "yidun_id",
-  "device_name",
-  "login_device_id",
-]);
+/** Poppo's (and `baseline_diff.py`'s) volatile keys: a policy's `volatileKeys` (see `policy.ts`). */
+export const VOLATILE: ReadonlySet<string> = POPPO_WIRE.volatileKeys;
 
 /** Credentials and identities; only empty-versus-present is compared. */
 export const SENSITIVE: ReadonlySet<string> = new Set([
@@ -101,16 +93,9 @@ export const SENSITIVE: ReadonlySet<string> = new Set([
   "captcha_token",
 ]);
 
-export const DEVICE_HEADERS: ReadonlySet<string> = new Set([
-  "x-request-time",
-  "x-request-device",
-  "x-request-device-id",
-  "x-request-agent",
-  "x-request-imei",
-  "x-device-info",
-]);
+export const DEVICE_HEADERS: ReadonlySet<string> = POPPO_WIRE.deviceHeaders;
 
-export const DEFAULT_DISCRIMINATORS: readonly string[] = ["type", "login_type", "use"];
+export const DEFAULT_DISCRIMINATORS: readonly string[] = POPPO_WIRE.discriminators;
 
 /** Legacy had no candidate owner: a candidate signs exactly like the current identity it will become. */
 const ROLE: Readonly<Record<string, string>> = {
@@ -120,15 +105,19 @@ const ROLE: Readonly<Record<string, string>> = {
   Untagged: "Anonymous",
 };
 
-export function normValue(key: string, value: string): string {
-  if (VOLATILE.has(key)) return "*";
+export function normValue(
+  key: string,
+  value: string,
+  volatile: ReadonlySet<string> = VOLATILE,
+): string {
+  if (volatile.has(key)) return "*";
   if (value === "") return "";
   if (SENSITIVE.has(key) || ALIAS.test(value)) return "<r>";
   return value;
 }
 
-function normPairs(pairs: readonly Pair[]): Pair[] {
-  return pairs.map(([k, v]) => [k, normValue(k, v)] as const);
+function normPairs(pairs: readonly Pair[], volatile: ReadonlySet<string>): Pair[] {
+  return pairs.map(([k, v]) => [k, normValue(k, v, volatile)] as const);
 }
 
 /** Python's string order (by code point), which is what `sorted()` over str uses. */
@@ -157,8 +146,8 @@ function sortedPairs(pairs: readonly Pair[]): Pair[] {
 
 // A POST query is the injector's copy of the form body for server logs; legacy built the body from a HashMap, so
 // its order was incidental. Only GET query order is compared.
-function normQuery(method: string, pairs: readonly Pair[]): Pair[] {
-  const query = normPairs(pairs);
+function normQuery(method: string, pairs: readonly Pair[], volatile: ReadonlySet<string>): Pair[] {
+  const query = normPairs(pairs, volatile);
   return method === "POST" ? sortedPairs(query) : query;
 }
 
@@ -199,8 +188,26 @@ function roleOf(value: unknown): string | null {
   return role;
 }
 
-/** Recorder output (and snapshots): `method`/`path`/`query`/`headers`/`fields`/`role`. */
+/** Recorder output (and snapshots) read with Poppo's wire: what `baseline_diff.py` reads. */
 export function fromCapture(record: unknown): Projection {
+  return readCapture(record, POPPO_WIRE);
+}
+
+/** A legacy recording or a snapshot, read with Poppo's wire. */
+export function fromBaseline(record: unknown): Projection {
+  return readBaseline(record, POPPO_WIRE);
+}
+
+/** The two readers for one app's wire (`policy.ts`): what `android_debug_wire_diff` uses for a profile's runs. */
+export function readersFor(policy: WirePolicy): {
+  readonly capture: (record: unknown) => Projection;
+  readonly baseline: (record: unknown) => Projection;
+} {
+  return { capture: (r) => readCapture(r, policy), baseline: (r) => readBaseline(r, policy) };
+}
+
+/** Recorder output (and snapshots): `method`/`path`/`query`/`headers`/`fields`/`role`, and a snapshot's `route`. */
+function readCapture(record: unknown, policy: WirePolicy): Projection {
   if (!isObject(record)) throw new MalformedWireInputError("record is not an object");
   if ("recorderError" in record) {
     throw new MalformedWireInputError(
@@ -210,14 +217,18 @@ export function fromCapture(record: unknown): Projection {
   const method = asString(record.method, "method");
   const headers = record.headers;
   if (!Array.isArray(headers)) throw new MalformedWireInputError("headers must be a list");
+  const route = record.route;
   return {
     method,
     path: asString(record.path, "path"),
     encrypted: asBool(record.encrypted, "encrypted"),
-    query: normQuery(method, asPairs(record.query, "query")),
-    deviceHeaders: headers.some((h) => DEVICE_HEADERS.has(asString(h, "header").toLowerCase())),
-    fields: sortedPairs(normPairs(asPairs(record.fields, "fields"))),
+    query: normQuery(method, asPairs(record.query, "query"), policy.volatileKeys),
+    deviceHeaders: headers.some((h) =>
+      policy.deviceHeaders.has(asString(h, "header").toLowerCase()),
+    ),
+    fields: sortedPairs(normPairs(asPairs(record.fields, "fields"), policy.volatileKeys)),
     role: roleOf(record.role),
+    ...(route === undefined || route === null ? {} : { route: asString(route, "route") }),
   };
 }
 
@@ -225,8 +236,8 @@ export function fromCapture(record: unknown): Projection {
  * A baseline recorded with the debug recorder has the capture format; the phase-0 recordings have the
  * `projection.wire` / `projection.decoded` format.
  */
-export function fromBaseline(record: unknown): Projection {
-  if (!isObject(record) || !("projection" in record)) return fromCapture(record);
+function readBaseline(record: unknown, policy: WirePolicy): Projection {
+  if (!isObject(record) || !("projection" in record)) return readCapture(record, policy);
   const p = record.projection;
   if (!isObject(p) || !isObject(p.wire) || !isObject(p.decoded)) {
     throw new MalformedWireInputError("projection must hold wire and decoded");
@@ -242,11 +253,11 @@ export function fromBaseline(record: unknown): Projection {
     method,
     path: asString(wire.path, "wire.path"),
     encrypted: asBool(wire.encrypted, "wire.encrypted"),
-    query: normQuery(method, asPairs(wire.query, "wire.query")),
+    query: normQuery(method, asPairs(wire.query, "wire.query"), policy.volatileKeys),
     deviceHeaders: wireHeaders.some(
-      (h) => Array.isArray(h) && DEVICE_HEADERS.has(asString(h[0], "header").toLowerCase()),
+      (h) => Array.isArray(h) && policy.deviceHeaders.has(asString(h[0], "header").toLowerCase()),
     ),
-    fields: sortedPairs(normPairs(asPairs(decoded.fields, "decoded.fields"))),
+    fields: sortedPairs(normPairs(asPairs(decoded.fields, "decoded.fields"), policy.volatileKeys)),
     role: roleOf(identity.role),
   };
 }
@@ -257,10 +268,11 @@ export function groupKey(
 ): string {
   const fields = new Map<string, string>();
   for (const [k, v] of projection.fields) fields.set(k, v); // dict(): the last duplicate wins
-  const disc = discriminators
-    .filter((k) => fields.has(k))
-    .map((k) => `${k}=${fields.get(k)}`)
-    .join(",");
+  const disc = [
+    // The route names the endpoint behind a shared path, before any field does.
+    ...(projection.route !== undefined ? [`route=${projection.route}`] : []),
+    ...discriminators.filter((k) => fields.has(k)).map((k) => `${k}=${fields.get(k)}`),
+  ].join(",");
   return `${projection.method} ${projection.path} [${disc}]`;
 }
 
@@ -375,8 +387,10 @@ export function diffGroups(baseline: Groups, capture: Groups): GroupReport[] {
 export interface CompareOptions {
   /** Paths to compare; empty / absent compares everything. */
   readonly only?: ReadonlySet<string>;
-  /** Fields that split one path into groups; absent uses {@link DEFAULT_DISCRIMINATORS}. */
+  /** Fields that split one path into groups; absent uses the policy's (Poppo's {@link DEFAULT_DISCRIMINATORS}). */
   readonly discriminators?: readonly string[];
+  /** The app's wire (see `policy.ts`); absent is Poppo's. */
+  readonly policy?: WirePolicy;
 }
 
 /** Parse JSONL text (blank lines skipped); every record must be readable, as in the Python tool. */
@@ -419,7 +433,11 @@ export function compareProjections(
   const fold = (projections: readonly Projection[]): Groups => {
     const groups: Groups = new Map();
     for (const p of projections) {
-      addToGroups(groups, roleCompared ? p : { ...p, role: null }, options.discriminators);
+      addToGroups(
+        groups,
+        roleCompared ? p : { ...p, role: null },
+        options.discriminators ?? options.policy?.discriminators,
+      );
     }
     return groups;
   };

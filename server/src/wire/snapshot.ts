@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ToolDomainError } from "../mcp/toolError.ts";
 import { parsePoppoHttpLine } from "../profile/poppo-vone/poppo_http/record.ts";
+import { POPPO_WIRE, type WirePolicy } from "./policy.ts";
 import { Aliaser, type WireRecord, projectRecord } from "./project.ts";
 
 /** Folder inside a run folder that holds snapshots and diff reports. */
@@ -34,6 +35,11 @@ export interface SnapshotStats {
   readonly written: number;
   /** Encrypted requests whose `request.decoded` was missing; their fields are empty. */
   readonly undecoded: number;
+  /**
+   * Protocol replays left out (rev6 `request.attempt` > 1: DoraLive resends a call once after a refreshed token). The
+   * app asked once; counting the resend would make the call a DUPLICATE.
+   */
+  readonly replays: number;
   readonly withRole: number;
   readonly byPath: Readonly<Record<string, number>>;
   readonly aliases: Readonly<Record<string, number>>;
@@ -66,7 +72,10 @@ export async function buildSnapshot(input: {
   readonly files: readonly string[];
   readonly only?: ReadonlySet<string>;
   readonly window?: SnapshotWindow;
+  /** The app's wire; absent is Poppo's. */
+  readonly policy?: WirePolicy;
 }): Promise<Snapshot> {
+  const policy = input.policy ?? POPPO_WIRE;
   const parsed: NonNullable<ReturnType<typeof parsePoppoHttpLine>>[] = [];
   let linesRead = 0;
   let linesSkipped = 0;
@@ -88,13 +97,18 @@ export async function buildSnapshot(input: {
   const aliaser = new Aliaser();
   // Pass 1 learns every uid / phone / email in the log, so a value echoed under another key (an id sent as
   // `created_in_id`) is aliased too, whichever request shows it first. Its output is discarded.
-  for (const record of parsed) projectRecord(record, aliaser, 0, { undecoded: 0 });
+  for (const record of parsed) projectRecord(record, aliaser, 0, { undecoded: 0 }, policy);
   const notes = { undecoded: 0 };
   const records: WireRecord[] = [];
   const byPath: Record<string, number> = {};
   let outsideWindow = 0;
   let outsidePaths = 0;
+  let replays = 0;
   for (const record of parsed) {
+    if ((record.request.attempt ?? 1) > 1) {
+      replays++;
+      continue;
+    }
     const { fromTsMs, toTsMs } = input.window ?? {};
     if (
       (fromTsMs !== undefined && record.tsMs < fromTsMs) ||
@@ -107,7 +121,7 @@ export async function buildSnapshot(input: {
       outsidePaths++;
       continue;
     }
-    records.push(projectRecord(record, aliaser, records.length + 1, notes));
+    records.push(projectRecord(record, aliaser, records.length + 1, notes, policy));
     byPath[record.path] = (byPath[record.path] ?? 0) + 1;
   }
   return {
@@ -120,6 +134,7 @@ export async function buildSnapshot(input: {
       outsidePaths,
       written: records.length,
       undecoded: notes.undecoded,
+      replays,
       withRole: records.filter((r) => r.role !== null).length,
       byPath,
       aliases: aliaser.counts(),

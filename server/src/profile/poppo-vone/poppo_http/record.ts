@@ -1,9 +1,9 @@
 import { z } from "zod";
 
 /**
- * Zod schema for the `http_*.jsonl` record format (rev4, draft).
+ * Zod schema for the `http_*.jsonl` record format (v1 rev6).
  *
- * Canonical contract: `submodulepoppo/docs/projects/http-log-jsonl-schema.md`.
+ * Canonical contract: `docs/contracts/http-log-jsonl.md` (producers: Poppo / Vone, DoraLive).
  *
  * # Strictness
  *
@@ -97,12 +97,22 @@ const BODY = z
     }
   });
 
+/**
+ * rev6 optional request fields (contract `docs/contracts/http-log-jsonl.md` §3.1). Absent means what rev5 meant:
+ * encryption is inferred, there is no route, the attempt is the first. A declared field of the wrong type fails the
+ * record (tolerant reader: unknown fields pass, malformed declared ones do not).
+ */
+const ROUTE = z.object({ controller: z.string(), method: z.string() }).passthrough();
+
 const REQUEST = z
   .object({
     headers: z.array(HEADER_OR_PARAM),
     params: z.array(HEADER_OR_PARAM),
     decoded: z.unknown(),
     body: BODY,
+    encrypted: z.boolean().optional(),
+    route: ROUTE.optional(),
+    attempt: z.number().int().min(1).optional(),
   })
   .passthrough();
 
@@ -148,6 +158,8 @@ const POPPO_HTTP_RECORD_BASE = z
     host: z.string(),
     protocol: z.string().nullable(),
     heartBeat: z.boolean(),
+    // rev6: the producer's own verdict (contract §4). Opaque: an unknown value passes and is re-derived.
+    outcome: z.string().optional(),
     request: REQUEST,
     response: RESPONSE.nullable(),
     error: ERROR.nullable(),
@@ -171,7 +183,7 @@ export type PoppoHttpRecord = z.output<typeof PoppoHttpRecordSchema> & {
 };
 
 /**
- * Validate `line` (one JSONL row) against the rev4 schema. Returns the
+ * Validate `line` (one JSONL row) against the contract (v1 rev6, `docs/contracts/http-log-jsonl.md`). Returns the
  * stamped record on success, `null` on any parse / validation failure. Never
  * throws — Phase 3 contract says parseLine MUST be exception-free
  * ("malformed JSON in an active file mid-write" is the active-file

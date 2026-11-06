@@ -1,4 +1,5 @@
 import type { PoppoHttpRecord } from "../profile/poppo-vone/poppo_http/record.ts";
+import { POPPO_WIRE, type WirePolicy } from "./policy.ts";
 
 /**
  * Projection of one `http_*.jsonl` record into the wire recorder's shape (`method`/`path`/`query`/`headers`/
@@ -26,28 +27,9 @@ export interface WireRecord {
   readonly role: WireRole | null;
   readonly time: number;
   readonly seq: number;
+  /** `controller/method` of a gateway route call (rev6 `request.route`); absent for any other call. */
+  readonly route?: string;
 }
-
-/** Parameters the app injects into every request; not the caller's business fields. */
-const GLOBAL_KEYS: ReadonlySet<string> = new Set([
-  "p",
-  "smei_id",
-  "device_name",
-  "c",
-  "v",
-  "yidun_id",
-  "sl",
-  "l",
-  "mcc",
-  "vs",
-  "uuid",
-  "_mtime",
-  "_random",
-  "_sign",
-  "b_vpn",
-  "_uid",
-  "_token",
-]);
 
 const DECODED_NOISE: ReadonlySet<string> = new Set(["_mtime", "b_vpn"]);
 
@@ -202,12 +184,18 @@ export interface ProjectionNotes {
   undecoded: number;
 }
 
+/**
+ * @param policy the app's wire (`policy.ts`): which parameters are its own globals, and whether `request.decoded`
+ *   holds the caller's fields for every request or only an encrypted one. Absent is Poppo's.
+ */
 export function projectRecord(
   record: PoppoHttpRecord,
   aliaser: Aliaser,
   seq: number,
   notes: ProjectionNotes,
+  policy: WirePolicy = POPPO_WIRE,
 ): WireRecord {
+  const globals = policy.globalKeys;
   const params = record.request.params.map((p) => [p.name, p.value] as const);
   const body = record.request.body;
   const form =
@@ -215,29 +203,32 @@ export function projectRecord(
       ? parseForm(body.text)
       : [];
   const envelope = record.method === "POST" ? form : params;
-  const encrypted = envelope.some(([k]) => k === "_sign");
+  // rev6: the producer says whether the payload was encrypted; before it, `_sign` in the envelope did (Poppo).
+  const encrypted = record.request.encrypted ?? envelope.some(([k]) => k === "_sign");
 
   let fields: (readonly [string, string])[];
   const decoded = record.request.decoded;
-  if (encrypted) {
-    if (typeof decoded === "object" && decoded !== null && !Array.isArray(decoded)) {
-      fields = Object.entries(decoded as Record<string, unknown>)
-        .filter(([k]) => !DECODED_NOISE.has(k))
-        .map(([k, v]) => [k, decodedText(aliaser, k, v)] as const);
-    } else {
-      notes.undecoded++;
-      fields = [];
-    }
+  const decodedObject =
+    typeof decoded === "object" && decoded !== null && !Array.isArray(decoded)
+      ? (decoded as Record<string, unknown>)
+      : null;
+  if (decodedObject !== null && (encrypted || policy.fieldsFromDecoded)) {
+    fields = Object.entries(decodedObject)
+      .filter(([k]) => !DECODED_NOISE.has(k))
+      .map(([k, v]) => [k, decodedText(aliaser, k, v)] as const);
+  } else if (encrypted) {
+    notes.undecoded++;
+    fields = [];
   } else {
     fields = envelope
-      .filter(([k]) => !GLOBAL_KEYS.has(k))
+      .filter(([k]) => !globals.has(k))
       .map(([k, v]) => [k, scrub(aliaser, k, v)] as const);
   }
   // POST copies short body fields into the query; what is left besides globals came from the caller.
   if (record.method === "POST") {
     const bodyKeys = new Set(form.map(([k]) => k));
     for (const [k, v] of params) {
-      if (!GLOBAL_KEYS.has(k) && !bodyKeys.has(k)) fields.push([k, scrub(aliaser, k, v)]);
+      if (!globals.has(k) && !bodyKeys.has(k)) fields.push([k, scrub(aliaser, k, v)]);
     }
   }
 
@@ -252,5 +243,8 @@ export function projectRecord(
     role: ownerRole(record),
     time: record.tsMs,
     seq,
+    ...(record.request.route !== undefined
+      ? { route: `${record.request.route.controller}/${record.request.route.method}` }
+      : {}),
   };
 }

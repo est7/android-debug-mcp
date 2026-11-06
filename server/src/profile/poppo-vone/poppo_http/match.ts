@@ -35,12 +35,23 @@ import type { PoppoHttpRecord } from "./record.ts";
  */
 const MAX_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/** Contract §4's outcomes, in its order of precedence; `malformed` only ever comes from a producer that writes it. */
+export const HTTP_OUTCOMES = [
+  "ok",
+  "http_error",
+  "transport_error",
+  "app_error",
+  "malformed",
+] as const;
+
+export type HttpOutcome = (typeof HTTP_OUTCOMES)[number];
+
 export const PoppoHttpQuerySchema = z
   .object({
     source: z.literal("poppo_http"),
     pathPrefix: z.string().min(1).max(1024).optional(),
     methodIn: z.array(z.string().min(1).max(16)).min(1).max(10).optional(),
-    outcome: z.enum(["ok", "http_error", "transport_error", "app_error"]).optional(),
+    outcome: z.enum(HTTP_OUTCOMES).optional(),
     excludeHeartbeat: z.boolean().optional(),
     // v2-G.1 Block A tightening: both bounds required + 24h window cap.
     // Pre-tightening (v0.5.0) the schema accepted partial ranges, which let
@@ -90,16 +101,25 @@ export type PoppoHttpQuery = z.output<typeof PoppoHttpQuerySchema>;
  * Producer's exclusive `response`/`error` invariant (validated at parse
  * time) guarantees `(response === null) !== (error === null)`, so the four
  * branches are exhaustive.
+ *
+ * # rev6: the producer's verdict first
+ *
+ * A record that carries a known `outcome` (contract §4) is taken at its word: only the producer knows that a 2xx
+ * answer which is not an envelope is `malformed` (DoraLive) rather than a resource (Poppo). An absent or unknown
+ * value falls back to the cascade above, which never yields `malformed`.
  */
-export function derivePoppoHttpOutcome(
-  r: PoppoHttpRecord,
-): "ok" | "http_error" | "transport_error" | "app_error" {
+export function derivePoppoHttpOutcome(r: PoppoHttpRecord): HttpOutcome {
+  if (isHttpOutcome(r.outcome)) return r.outcome;
   if (r.error !== null) return "transport_error";
   // r.response is non-null past this point (schema invariant).
   const status = r.response?.status ?? 0;
   if (status < 200 || status >= 300) return "http_error";
   if (r.response?.app?.ok === false) return "app_error";
   return "ok";
+}
+
+function isHttpOutcome(value: unknown): value is HttpOutcome {
+  return typeof value === "string" && (HTTP_OUTCOMES as readonly string[]).includes(value);
 }
 
 /**

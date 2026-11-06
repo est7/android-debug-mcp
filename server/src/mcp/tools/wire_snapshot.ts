@@ -17,6 +17,7 @@ import {
 import { registerDebugTool } from "../register.ts";
 import { ToolDomainError } from "../toolError.ts";
 import { ok, runIdInput, touch } from "./_shared.ts";
+import { profileInput, resolveWire } from "./_wire.ts";
 
 const pathInput = z
   .string()
@@ -36,6 +37,7 @@ const inputSchema = z
     fromMark: z.string().min(1).max(128).optional(),
     toMark: z.string().min(1).max(128).optional(),
     pull: z.boolean().default(true),
+    profile: profileInput.optional(),
   })
   .strict();
 
@@ -56,6 +58,8 @@ const outputSchema = z
     outsideWindow: z.number().int(),
     outsidePaths: z.number().int(),
     undecoded: z.number().int(),
+    replays: z.number().int(),
+    profile: z.string().nullable(),
     withRole: z.number().int(),
     byPath: z.record(z.string(), z.number().int()),
     aliases: z.record(z.string(), z.number().int()),
@@ -67,8 +71,8 @@ const description = [
   "Project a run's HTTP log (`http_*.jsonl`) into a redacted request-parameter snapshot that `android_debug_wire_diff` can compare with another build's snapshot, so device regressions can be checked without app-side recorders.",
   "",
   "Use when: a candidate build and a reference build were driven through the same account flow (sign-in, switch, rebind) and their requests must be compared by parameters, not by eye. Run it once per build, then diff the two snapshots.",
-  'Args: `runId` (a run; an active session first pulls the device\'s http-logs, a finished run uses what it already pulled) OR `files` (absolute paths of local `http_*.jsonl`) plus `outDir`; `label` (snapshot name, default `snapshot`); `only` (exact request paths, e.g. `["/user/login"]`); window: `fromTsMs`/`toTsMs` (epoch ms) or `fromMark`/`toMark` (names from `mark_event`, last occurrence; explicit ms win); `pull` (default true; false skips the device pull of an active session).',
-  "Returns: `{label, path, metaPath, window, filesRead, written, linesRead, linesSkipped, outsideWindow, outsidePaths, undecoded, withRole, byPath, aliases, warnings?}`. The snapshot is `<runDir>/wire/<label>.jsonl` (or `<outDir>/<label>.jsonl`), one record per request in the recorder shape: `method`, `path`, `query` pairs, `headers` names, `encrypted`, `fields` (decoded `_random`/`_sign` keys, or the form / query fields), `role` (from `request.owner.role` when the producer writes it, else null), `time`, `seq`. Credentials, codes, tokens and device ids are `<redacted>` by key name (empty stays empty); uid / phone / email values are stable per-snapshot aliases (`<uid:1>`, `<phone:1>`, `<email:1>`). `aliases` and `byPath` are counts only.",
+  "Args: `runId` (a run; an active session first pulls the device's http-logs, a finished run uses what it already pulled) OR `files` (absolute paths of local `http_*.jsonl`) plus `outDir`; `label` (snapshot name, default `snapshot`); `only` (exact request paths, e.g. `[\"/user/login\"]`); window: `fromTsMs`/`toTsMs` (epoch ms) or `fromMark`/`toMark` (names from `mark_event`, last occurrence; explicit ms win); `pull` (default true; false skips the device pull of an active session); `profile` (a built-in profile whose wire to read with, e.g. `dora`; default: the run's own profile, else Poppo's).",
+  "Returns: `{label, path, metaPath, window, filesRead, written, linesRead, linesSkipped, outsideWindow, outsidePaths, undecoded, replays, profile, withRole, byPath, aliases, warnings?}`. `replays` counts protocol resends left out (`request.attempt` > 1); `profile` names the wire used (null: Poppo's default). The snapshot is `<runDir>/wire/<label>.jsonl` (or `<outDir>/<label>.jsonl`), one record per request in the recorder shape: `method`, `path`, `query` pairs, `headers` names, `encrypted`, `fields` (decoded `_random`/`_sign` keys, or the form / query fields; with the `dora` wire always `request.decoded`), `route` (`controller/method` when the record has `request.route`), `role` (from `request.owner.role` when the producer writes it, else null), `time`, `seq`. Credentials, codes, tokens and device ids are `<redacted>` by key name (empty stays empty); uid / phone / email values are stable per-snapshot aliases (`<uid:1>`, `<phone:1>`, `<email:1>`). `aliases` and `byPath` are counts only.",
   "Errors: `invalid_argument` for a bad `label`, missing/relative paths, a reversed window or neither `runId` nor `files`; `run_missing` for an unknown runId; `mark_not_found` when a named mark is not in the run; `adb_command_failed` / `adb_not_found` / `device_disconnected` when the device pull fails.",
 ].join("\n");
 
@@ -140,6 +144,7 @@ export function registerWireSnapshot(server: McpServer, manager: SessionManager)
         }
       }
 
+      const wire = await resolveWire(input.profile, runDir);
       const window = await resolveWindow(input, runDir);
       const files =
         input.files ??
@@ -154,6 +159,7 @@ export function registerWireSnapshot(server: McpServer, manager: SessionManager)
         files,
         ...(input.only !== undefined ? { only: new Set(input.only) } : {}),
         window,
+        policy: wire.policy,
       });
       const dir = input.outDir ?? join(runDir as string, WIRE_SUBDIR);
       const path = await writeSnapshot({
@@ -165,6 +171,7 @@ export function registerWireSnapshot(server: McpServer, manager: SessionManager)
           ...(input.runId !== undefined ? { runId: input.runId } : {}),
           window,
           ...(input.only !== undefined ? { only: input.only } : {}),
+          profile: wire.profile,
           sources: files.map((f) => basename(f)),
         },
       });
@@ -196,6 +203,8 @@ export function registerWireSnapshot(server: McpServer, manager: SessionManager)
         outsideWindow: stats.outsideWindow,
         outsidePaths: stats.outsidePaths,
         undecoded: stats.undecoded,
+        replays: stats.replays,
+        profile: wire.profile,
         withRole: stats.withRole,
         byPath: stats.byPath,
         aliases: stats.aliases,

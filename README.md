@@ -296,8 +296,12 @@ Why this shape: `clearDeviceLogcat` removes pre-repro noise; the marker anchors
 
 ### W3 — "An API errored / a screen is slow — find the exact request + its context"
 
-Profile-driven (Poppo/Vone `poppo_http`). Requires `projectRoot` at a repo with
-`.android-debug-mcp/profile.json`.
+Profile-driven (Poppo/Vone and DoraLive write the same `http_*.jsonl`, read by the
+`poppo_http` source; contract: `docs/contracts/http-log-jsonl.md`). Requires
+`projectRoot` at a repo with `.android-debug-mcp/profile.json` (`poppo-vone` or
+`dora`; the profile also picks the wire for `wire_snapshot` / `wire_diff`).
+`outcome` also takes `malformed` (a producer's own verdict: DoraLive's 2xx answer
+that is no envelope).
 
 ```jsonc
 android_debug_start_session    { "packageName": "com.baitu.poppo", "projectRoot": "/path/to/submodulepoppo" }

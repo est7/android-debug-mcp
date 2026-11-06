@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { WirePolicy } from "../wire/policy.ts";
 
 /**
  * `<projectRoot>/.android-debug-mcp/profile.json` —— the per-project pointer
@@ -359,4 +360,11 @@ export interface Profile {
    * (the adapter layer); core stays generic.
    */
   readonly logcatTimelineExcludeTags?: readonly string[];
+  /**
+   * OPTIONAL — the app's wire for `android_debug_wire_snapshot` / `android_debug_wire_diff` (contract
+   * `docs/contracts/http-log-jsonl.md` §6): its global parameters, volatile values, device headers, grouping fields
+   * and where the caller's fields are. Absent is Poppo's (`POPPO_WIRE`), which is also what a run without a
+   * profile compares with.
+   */
+  readonly wire?: WirePolicy;
 }

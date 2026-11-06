@@ -270,7 +270,7 @@ profile 驱动(Poppo/Vone 的 `poppo_http`)。需要 `projectRoot` 指向带
 
 ```jsonc
 android_debug_start_session    { "packageName": "com.baitu.poppo", "projectRoot": "/path/to/submodulepoppo" }
-//   → profileName: "poppo-vone"  (否则 null → poppo_http 没有 provider)
+//   → profileName: "poppo-vone"  (否则 null → poppo_http 没有 provider);DoraLive 是 "dora",同一个 poppo_http source 读同一份契约(docs/contracts/http-log-jsonl.md)
 android_debug_mark_event       { "runId": "<id>", "name": "symptom" }
 //   ... 复现 ...
 android_debug_search_evidence  { "runId": "<id>", "query": { "source": "poppo_http", "outcome": "http_error" } }
