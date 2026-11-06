@@ -27,6 +27,7 @@
 | [`v2/v2-j-implementation-plan.md`](./v2/v2-j-implementation-plan.md) | v2-J 实施计划(性能快照轴 C:新增 `android_debug_perf_snapshot`,host-side `dumpsys gfxinfo` + `meminfo`,默认 digest,`raw:true` opt-in,`reset:true` 支持 reset→act→read) | locked 2026-05-29 |
 | [`v2/v2-k-implementation-plan.md`](./v2/v2-k-implementation-plan.md) | v2-K 实施计划(current-page ergonomics / F3:`search_evidence` 加 `order:"asc"\|"desc"`,desc 单页不分页;streaming 源 ring-buffer 取最新;「当前页」一次调用;2 phase) | locked 2026-06-01 |
 | [`v2/v2-l-wire-diff.md`](./v2/v2-l-wire-diff.md) | v2-L 请求参数快照与对比(`wire_snapshot` / `wire_diff`:由 `http_*.jsonl` 生成录制器形态的投影并移植 `baseline_diff.py`,无需 app 侧录制器) | implemented 0.8.0 |
+| [`contracts/http-log-jsonl.md`](./contracts/http-log-jsonl.md) | 跨仓 HTTP 日志契约 `http_*.jsonl` v1 rev6 + human console `#seq` 分段;权威来源(取代 Poppo 侧 rev5 文件),producer:Poppo / Vone / DoraLive;consumer 规则(§6)与 `dora` profile 已实现 | frozen 2026-11-06 |
 | `architecture.md` | 系统架构图、session 生命周期、数据流 | v1.1(未建立) |
 | [`test-plan.md`](./test-plan.md) | 5 scenario 真机 manual checklist | Phase 11 落盘 |
 | [`audits/`](./audits/) | 各阶段 codex audit 报告原文(phase-1 … phase-N) | living |
